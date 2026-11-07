@@ -1,0 +1,13 @@
+[Unit]
+Description=USB Ethernet NIC tuning (r8152 / RTL8156)
+Documentation=man:ethtool(8)
+After=systemd-udevd.service
+Before=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/usbnic --quiet persist apply
+RemainAfterExit=no
+
+[Install]
+WantedBy=multi-user.target

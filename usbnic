@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+# usbnic - RTL8156 / RTL815x 2.5G USB 网卡管理与调优工具
+set -euo pipefail
+
+USBNIC_VERSION="1.0.0"
+USBNIC_HOME=$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)
+export USBNIC_HOME
+
+LIBDIR="$USBNIC_HOME/lib"
+if [[ ! -d $LIBDIR ]]; then
+  LIBDIR=/usr/local/lib/usbnic/lib
+fi
+if [[ ! -f $LIBDIR/common.sh ]]; then
+  printf '找不到 usbnic 库文件: %s\n' "$LIBDIR" >&2
+  exit 1
+fi
+
+# shellcheck source=/dev/null
+source "$LIBDIR/common.sh"
+# shellcheck source=/dev/null
+source "$LIBDIR/info.sh"
+# shellcheck source=/dev/null
+source "$LIBDIR/tune.sh"
+# shellcheck source=/dev/null
+source "$LIBDIR/bench.sh"
+# shellcheck source=/dev/null
+source "$LIBDIR/persist.sh"
+# shellcheck source=/dev/null
+source "$LIBDIR/hotspot.sh"
+
+usage() {
+  cat <<EOF
+usbnic ${USBNIC_VERSION} - RTL8156 2.5G USB 网卡管理工具
+（0bda:8156 为 USB 有线以太网卡；本工具也支持其他 r8152 设备）
+
+用法: sudo usbnic [-d 网卡名] [-n] [-q] <命令> [参数]
+
+全局选项:
+  -d, --dev IFACE   指定网卡（默认自动识别 0bda:8156 / r8152）
+  -n, --dry-run     只打印将执行的命令，不修改系统（无需 root）
+  -q, --quiet       精简输出
+  -h, --help        显示帮助
+  -V, --version     显示版本
+
+查看:
+  list                      列出所有 USB 网络设备（含 Wi-Fi）
+  info [IFACE]              设备 / 驱动 / 链路 / 地址 / 调优详情
+  status [IFACE]            简要状态
+  caps                      硬件能力矩阵（支持 / 不支持）
+  diag                      健康检查与优化建议（有 FAIL 时返回 1）
+  stats [--delta 秒]        计数器；--delta 显示区间速率
+  watch [间隔] [次数]       实时速率 / 错误监控
+  link                      链路协商详情
+  up | down                 启用 / 关闭网卡
+
+链路与调优:
+  speed <auto|10|100|1000|2500> [--force]
+                            限制协商速率（advertise）；--force 关闭自协商强制
+  restart                   重新触发自协商
+  eee <on|off|show>         节能以太网（EEE）
+  wol <g|d|off|show>        网络唤醒
+  mtu <68-9000>             设置 MTU（巨型帧需链路两端一致）
+  mac <地址|random|reset>   修改 MAC 地址
+  ring [100-4096]           RX 环形缓冲（不带参数则查看）
+  irq [微秒]                中断合并 rx-usecs（0 最灵敏）
+  txq [数量]                TX 队列长度 txqueuelen
+  offload <show|on|off>     硬件卸载（校验和/TSO/GSO/GRO/VLAN）
+  power <on|auto|show>      USB 自动挂起控制（on=禁用挂起）
+  flags <promisc|allmulti> <on|off|show>
+  tune <throughput|latency|balanced|lowpower|show>
+
+热点（需 Wi-Fi 网卡，8156 本身无射频）:
+  hotspot start [--wifi IFACE] [--ssid NAME] [--pass PASS] [--open]
+                [--band bg|a] [--channel N] [--gateway IP/PFX] [--autostart]
+  hotspot stop              停止热点（保留配置）
+  hotspot status            查看 SSID / 密码 / 状态 / 客户端数
+  hotspot clients [IFACE]   查看已关联设备的 MAC / IP / 信号 / 速率
+
+测试与运维:
+  bench --server | --client <IP> [--time 10] [--streams 4] [--udp] [--reverse] [--bidir]
+  soak [分钟] [采样秒]      稳定性压测（掉链路 / 错误计数 / 平均速率）
+  reset                     通过驱动重绑定复位 USB 网卡
+  net <show|dhcp|static>    用 NetworkManager 配置 DHCP / 静态地址
+  persist <install|uninstall|show|apply>
+                            开机与热插拔自动应用 /etc/usbnic/usbnic.conf
+
+示例:
+  sudo usbnic tune balanced
+  sudo usbnic speed 2500
+  sudo usbnic -n offload off
+  sudo usbnic bench --client 192.168.1.10 --streams 4
+  sudo usbnic net static 192.168.50.2/24 192.168.50.1 223.5.5.5
+  sudo usbnic persist install
+EOF
+}
+
+# ---------- 全局选项 ----------
+while (( $# )); do
+  case $1 in
+    -d | --dev)
+      if [[ -z ${2:-} ]]; then die "--dev 需要网卡名"; fi
+      DEVIP=$2
+      shift 2
+      ;;
+    -n | --dry-run)
+      DRY_RUN=1
+      shift
+      ;;
+    -q | --quiet)
+      QUIET=1
+      shift
+      ;;
+    -h | --help)
+      usage
+      exit 0
+      ;;
+    -V | --version)
+      printf 'usbnic %s\n' "$USBNIC_VERSION"
+      exit 0
+      ;;
+    --)
+      shift
+      break
+      ;;
+    -*)
+      die "未知选项: $1（运行 usbnic help 查看用法）"
+      ;;
+    *)
+      break
+      ;;
+  esac
+done
+
+cmd=${1:-help}
+if (( $# )); then shift; fi
+
+case $cmd in
+  help | -h | --help)
+    usage
+    exit 0
+    ;;
+  version | -V | --version)
+    printf 'usbnic %s\n' "$USBNIC_VERSION"
+    exit 0
+    ;;
+esac
+
+if ! have ip; then
+  die "缺少 ip 命令，请安装 iproute2"
+fi
+if ! have ethtool; then
+  die "缺少 ethtool，请安装: sudo apt install ethtool"
+fi
+
+case $cmd in
+  list | ls) cmd_list ;;
+  info) cmd_info "$@" ;;
+  status | st) cmd_status "$@" ;;
+  caps) cmd_caps ;;
+  diag) cmd_diag ;;
+  stats) cmd_stats "$@" ;;
+  watch) cmd_watch "$@" ;;
+  link) cmd_link ;;
+  up) cmd_up ;;
+  down) cmd_down ;;
+  speed) cmd_speed "$@" ;;
+  restart) cmd_restart ;;
+  eee) cmd_eee "$@" ;;
+  wol) cmd_wol "$@" ;;
+  mtu) cmd_mtu "$@" ;;
+  mac) cmd_mac "$@" ;;
+  ring) cmd_ring "$@" ;;
+  irq) cmd_irq "$@" ;;
+  txq) cmd_txq "$@" ;;
+  offload) cmd_offload "$@" ;;
+  power) cmd_power "$@" ;;
+  flags) cmd_flags "$@" ;;
+  tune) cmd_tune "$@" ;;
+  bench) cmd_bench "$@" ;;
+  soak) cmd_soak "$@" ;;
+  reset) cmd_reset ;;
+  net) cmd_net "$@" ;;
+  persist) cmd_persist "$@" ;;
+  hotspot) cmd_hotspot "$@" ;;
+  *)
+    die "未知命令: $cmd（运行 usbnic help 查看用法）"
+    ;;
+esac
