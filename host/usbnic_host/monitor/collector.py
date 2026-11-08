@@ -258,9 +258,15 @@ class Monitor:
         health = uplink.get("health") or {}
         if health.get("internet_ok") is False:
             warnings.append("当前默认上行的公网探测失败")
+        shared_gateway = any(
+            iface.get("connection") in ("usbnic-gateway", "usbnic-hotspot")
+            for iface in interfaces
+        )
         if not leases:
-            warnings.append("未读取到 DHCP 租约；模式 2/3 的客户端识别会不完整")
-            if not any(i.get("wifi_mode") == "AP" for i in interfaces):
+            warnings.append("未读取到 DHCP 租约（非 root 或租约文件不可读）")
+            if not shared_gateway and not any(
+                iface.get("wifi_mode") == "AP" for iface in interfaces
+            ):
                 warnings.append("当前不是 DHCP 网关，设备列表依赖 ARP 发现，可能不完整")
         ipv6_interfaces = [i["name"] for i in interfaces if i.get("ipv6")]
         if ipv6_interfaces:
