@@ -1,4 +1,5 @@
 const POLL_MS = 2000;
+const PROXY_POLL_MS = 10000;
 const MAX_POINTS = 90;
 
 const state = {
@@ -11,6 +12,11 @@ const state = {
   proxyBusy: false,
   modeBusy: false,
   lastStatusAt: 0,
+  proxyOverview: null,
+  proxySignature: "",
+  proxyFilters: {},
+  proxyEls: {},
+  proxyGroupBusy: "",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -352,8 +358,281 @@ async function toggleMode(mode) {
   }
 }
 
+function proxyTypeLabel(type) {
+  return (
+    {
+      Selector: "手动选择",
+      URLTest: "自动测速",
+      Fallback: "故障转移",
+      LoadBalance: "负载均衡",
+      Relay: "链式代理",
+    }[type] || type || "策略组"
+  );
+}
+
+function proxyModeLabel(mode) {
+  return (
+    {
+      rule: "规则模式",
+      global: "全局模式",
+      direct: "直连模式",
+    }[mode] || mode || ""
+  );
+}
+
+function fmtDelay(delay, alive = true) {
+  if (!alive) return "不可用";
+  if (delay === null || delay === undefined) return "未测速";
+  if (delay === 0) return "超时";
+  return `${delay} ms`;
+}
+
+function proxySignature(overview) {
+  return JSON.stringify({
+    ok: Boolean(overview && overview.ok),
+    groups: (overview && overview.groups) || [],
+  });
+}
+
+function updateProxyMeta(overview) {
+  if (!overview || !overview.ok) {
+    setText("proxyMeta", (overview && overview.error) || "Clash 不可用");
+    return;
+  }
+  const parts = [proxyModeLabel(overview.mode), `更新于 ${fmtTime(overview.updated_at)}`].filter(
+    Boolean
+  );
+  setText("proxyMeta", parts.join(" · "));
+}
+
+async function refreshProxies(force = false) {
+  if (state.proxyGroupBusy) return;
+  // 用户正在筛选节点时不重建列表，避免输入框失焦
+  const active = document.activeElement;
+  if (!force && active && active.classList && active.classList.contains("proxy-search")) {
+    return;
+  }
+  try {
+    const overview = await fetchJSON("/api/proxies");
+    state.proxyOverview = overview;
+    updateProxyMeta(overview);
+    const signature = proxySignature(overview);
+    if (!force && signature === state.proxySignature) return;
+    state.proxySignature = signature;
+    renderProxies(overview);
+  } catch (error) {
+    setText("proxyMeta", "无法读取 Clash");
+    console.warn(error);
+  }
+}
+
+function applyProxyOverview(overview) {
+  if (!overview) return;
+  state.proxyOverview = overview;
+  state.proxySignature = proxySignature(overview);
+  updateProxyMeta(overview);
+  renderProxies(overview);
+}
+
+function renderProxies(overview) {
+  const container = $("proxyGroups");
+  if (!container) return;
+  state.proxyEls = {};
+  container.replaceChildren();
+  if (!overview || !overview.ok) {
+    container.appendChild(
+      el("div", "empty-small", (overview && overview.error) || "Clash API 不可用")
+    );
+    return;
+  }
+  const groups = overview.groups || [];
+  if (!groups.length) {
+    container.appendChild(el("div", "empty-small", "Clash 暂无策略组"));
+    return;
+  }
+  for (const group of groups) {
+    container.appendChild(buildProxyGroup(group));
+  }
+}
+
+function buildProxyGroup(group) {
+  const wrap = el("div", "proxy-group");
+  const head = el("div", "proxy-group-head");
+
+  const title = el("div", "proxy-group-title");
+  const nameLine = el("div", "proxy-group-name");
+  nameLine.appendChild(el("strong", "", group.name));
+  nameLine.appendChild(el("span", "proxy-type-badge", proxyTypeLabel(group.type)));
+  if (group.auto) nameLine.appendChild(el("span", "proxy-type-badge auto", "自动"));
+  if (group.fixed) nameLine.appendChild(el("span", "proxy-type-badge fixed", "已固定"));
+  title.appendChild(nameLine);
+
+  const exitLine = el("div", "proxy-exit");
+  exitLine.appendChild(el("span", "proxy-exit-label", "实际出口"));
+  exitLine.appendChild(el("span", "proxy-exit-name", group.exit || "—"));
+  exitLine.appendChild(el("span", "proxy-delay", fmtDelay(group.delay, group.alive)));
+  if ((group.chain || []).length) {
+    exitLine.appendChild(el("span", "proxy-chain", group.chain.join(" → ")));
+  }
+  title.appendChild(exitLine);
+  head.appendChild(title);
+
+  const tools = el("div", "proxy-tools");
+  if ((group.options || []).length > 30) {
+    const input = el("input", "proxy-search");
+    input.type = "search";
+    input.placeholder = "筛选节点";
+    input.value = state.proxyFilters[group.name] || "";
+    input.addEventListener("input", () => {
+      state.proxyFilters[group.name] = input.value.trim().toLowerCase();
+      const entry = state.proxyEls[group.name];
+      if (entry) renderProxyNodes(entry.group, entry.grid);
+    });
+    tools.appendChild(input);
+  }
+  if (group.fixed) {
+    const autoButton = el("button", "ghost-btn auto-btn", "恢复自动");
+    autoButton.type = "button";
+    autoButton.addEventListener("click", () => restoreProxyAuto(group.name));
+    tools.appendChild(autoButton);
+  }
+  const testButton = el("button", "ghost-btn", "测速");
+  testButton.type = "button";
+  testButton.addEventListener("click", () => testProxyGroup(group.name, testButton));
+  tools.appendChild(testButton);
+  head.appendChild(tools);
+
+  wrap.appendChild(head);
+  const grid = el(
+    "div",
+    group.selectable ? "proxy-node-grid" : "proxy-node-grid readonly"
+  );
+  wrap.appendChild(grid);
+  state.proxyEls[group.name] = { group, grid, node: wrap };
+  renderProxyNodes(group, grid);
+  return wrap;
+}
+
+function renderProxyNodes(group, grid) {
+  const query = state.proxyFilters[group.name] || "";
+  const options = (group.options || []).filter((option) => {
+    if (!query) return true;
+    return `${option.name} ${option.exit || ""} ${option.type || ""}`
+      .toLowerCase()
+      .includes(query);
+  });
+  grid.replaceChildren();
+  if (!options.length) {
+    grid.appendChild(el("div", "empty-small", "没有匹配的节点"));
+    return;
+  }
+  for (const option of options) {
+    const chip = el(group.selectable ? "button" : "div", "proxy-node");
+    if (group.selectable) chip.type = "button";
+    chip.classList.toggle("selected", Boolean(option.selected));
+    chip.classList.toggle("exit", option.name === group.exit);
+    chip.classList.toggle("dead", !option.alive || option.delay === 0);
+    if (option.is_group) chip.classList.add("group");
+    chip.appendChild(el("span", "proxy-node-name", option.name));
+
+    const meta = [];
+    if (option.is_group) {
+      const label = proxyTypeLabel(option.type);
+      meta.push(
+        option.exit && option.exit !== option.name ? `${label} → ${option.exit}` : label
+      );
+    }
+    meta.push(fmtDelay(option.delay, option.alive));
+    chip.appendChild(el("span", "proxy-node-meta", meta.join(" · ")));
+
+    if (group.selectable) {
+      chip.disabled = state.proxyGroupBusy === group.name;
+      chip.addEventListener("click", () => selectProxyNode(group.name, option.name));
+    }
+    grid.appendChild(chip);
+  }
+}
+
+function rerenderProxyGroup(name) {
+  const entry = state.proxyEls[name];
+  if (entry) renderProxyNodes(entry.group, entry.grid);
+}
+
+async function selectProxyNode(group, name) {
+  if (state.proxyGroupBusy) return;
+  state.proxyGroupBusy = group;
+  rerenderProxyGroup(group);
+  setText("proxyMeta", `切换 ${group} 中…`);
+  try {
+    const response = await fetch("/api/proxies/select", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ group, name }),
+    });
+    const data = await response.json();
+    if (!data.ok) throw new Error(data.error || "选择失败");
+    applyProxyOverview(data.overview);
+  } catch (error) {
+    alert(`切换节点失败:\n${error.message}`);
+    updateProxyMeta(state.proxyOverview);
+  } finally {
+    state.proxyGroupBusy = "";
+    rerenderProxyGroup(group);
+  }
+}
+
+async function restoreProxyAuto(group) {
+  if (state.proxyGroupBusy) return;
+  state.proxyGroupBusy = group;
+  rerenderProxyGroup(group);
+  setText("proxyMeta", `恢复 ${group} 自动选择中…`);
+  try {
+    const response = await fetch("/api/proxies/auto", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ group }),
+    });
+    const data = await response.json();
+    if (!data.ok) throw new Error(data.error || "恢复自动失败");
+    applyProxyOverview(data.overview);
+  } catch (error) {
+    alert(`恢复自动失败:\n${error.message}`);
+    updateProxyMeta(state.proxyOverview);
+  } finally {
+    state.proxyGroupBusy = "";
+    rerenderProxyGroup(group);
+  }
+}
+
+async function testProxyGroup(group, button) {
+  if (state.proxyGroupBusy) return;
+  state.proxyGroupBusy = group;
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "测速中…";
+  setText("proxyMeta", `正在测试 ${group}…`);
+  try {
+    const response = await fetch("/api/proxies/delay", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ target: group }),
+    });
+    const data = await response.json();
+    if (!data.ok) throw new Error(data.error || "测速失败");
+    applyProxyOverview(data.overview);
+  } catch (error) {
+    alert(`测速失败:\n${error.message}`);
+    updateProxyMeta(state.proxyOverview);
+  } finally {
+    state.proxyGroupBusy = "";
+    button.disabled = false;
+    button.textContent = original;
+  }
+}
+
 function renderWarnings(status) {
   const bar = $("warningBar");
+
   if (!bar) return;
   const warnings = status.warnings || [];
   bar.replaceChildren();
@@ -781,6 +1060,7 @@ async function toggleProxy() {
     const data = await response.json();
     if (!data.ok) throw new Error(data.error || "切换失败");
     await refresh();
+    refreshProxies(true);
   } catch (error) {
     alert(`代理切换失败: ${error.message}`);
   } finally {
@@ -817,10 +1097,17 @@ function init() {
   bindFilters();
   const proxyButton = $("proxyToggle");
   if (proxyButton) proxyButton.addEventListener("click", toggleProxy);
+  const proxyRefresh = $("proxyRefresh");
+  if (proxyRefresh) proxyRefresh.addEventListener("click", () => refreshProxies(true));
   refresh();
+  refreshProxies();
   setInterval(refresh, POLL_MS);
+  setInterval(refreshProxies, PROXY_POLL_MS);
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) refresh();
+    if (!document.hidden) {
+      refresh();
+      refreshProxies();
+    }
   });
 }
 

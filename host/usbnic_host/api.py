@@ -10,6 +10,12 @@ from pydantic import BaseModel
 
 from . import __version__
 from .config import Config
+from .monitor.clash_proxies import (
+    proxy_overview,
+    restore_auto,
+    select_proxy,
+    test_delay,
+)
 from .monitor.collector import Monitor
 from .monitor.proxy import set_proxy
 from .net.modes import MODES, apply_mode
@@ -19,6 +25,19 @@ WEB_DIR = Path(__file__).parent / "web"
 
 class ProxyToggleRequest(BaseModel):
     enable: bool
+
+
+class ProxySelectRequest(BaseModel):
+    group: str
+    name: str
+
+
+class ProxyAutoRequest(BaseModel):
+    group: str
+
+
+class ProxyDelayRequest(BaseModel):
+    target: str
 
 
 class ModeRequest(BaseModel):
@@ -107,6 +126,28 @@ def create_app(monitor: Monitor, config: Config) -> FastAPI:
             "error": result["error"],
             "proxy": snapshot.get("proxy", {}),
         }
+
+    @app.get("/api/proxies")
+    def proxies() -> dict:
+        return proxy_overview(config)
+
+    @app.post("/api/proxies/select")
+    def proxies_select(body: ProxySelectRequest) -> dict:
+        result = select_proxy(config, body.group, body.name)
+        result["overview"] = proxy_overview(config)
+        return result
+
+    @app.post("/api/proxies/auto")
+    def proxies_auto(body: ProxyAutoRequest) -> dict:
+        result = restore_auto(config, body.group)
+        result["overview"] = proxy_overview(config)
+        return result
+
+    @app.post("/api/proxies/delay")
+    def proxies_delay(body: ProxyDelayRequest) -> dict:
+        result = test_delay(config, body.target)
+        result["overview"] = proxy_overview(config)
+        return result
 
     @app.post("/api/mode")
     def mode_switch(body: ModeRequest) -> dict:
