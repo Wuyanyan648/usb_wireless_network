@@ -306,6 +306,21 @@ cd host && python3 -m pytest -q
 
 启动前会自动清理上次残留的 nftables 表和策略路由，避免规则叠加导致启动失败；停止时如果代理是上位机开启的，会同时关闭 TUN / TPROXY。网关或热点连接本身保持现状，需要断开时在页面切到「默认客户端」。
 
+### 开机自启
+
+```bash
+scripts/install-host-boot.sh              # 安装并启用开机自启
+scripts/install-host-boot.sh --uninstall  # 移除开机自启
+```
+
+安装后：
+
+- `usbnicd.service`：开机启动上位机后台
+- `usbnic-boot.service`：检测到家庭网关硬件时自动启用家庭网关，**代理保持关闭**
+- 登录桌面时若处于家庭网关模式，自动打开 `http://127.0.0.1:8787`
+
+家庭网关硬件判定条件：下游 USB 网卡有载波、存在已连接网线的有线上行，并且上游默认网关等于 `home_gateway`（默认 `192.168.1.1`）。离开家时通常不满足条件，不会自动启用网关。
+
 依赖：`python3-fastapi`、`python3-uvicorn`、`python3-psutil`、`python3-yaml`，以及 `NetworkManager`、`nftables`。
 
 ### 三种网络模式
@@ -352,6 +367,9 @@ gateway_iface: enx6c1ff7d02c4a
 lan_cidr: 10.10.10.0/24
 hotspot_iface: wlx6c1ff7f46d6d
 hotspot_cidr: 192.168.50.0/24
+
+# 开机自动进入家庭网关的判定条件
+home_gateway: 192.168.1.1
 
 clash_tproxy_port: 7896
 ```

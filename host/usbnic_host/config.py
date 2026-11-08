@@ -40,6 +40,8 @@ class Config:
     lan_cidr: str = "10.10.10.0/24"
     hotspot_iface: str = ""
     hotspot_cidr: str = "192.168.50.0/24"
+    # 家庭网关开机判定：上游默认网关必须是这个地址（留空则只看网卡载波）
+    home_gateway: str = ""
     clash_tproxy_port: int = 7896
     clash_redir_port: int = 7895
 
@@ -87,6 +89,7 @@ class Config:
             lan_cidr=str(raw.get("lan_cidr", "10.10.10.0/24")),
             hotspot_iface=str(raw.get("hotspot_iface", "") or ""),
             hotspot_cidr=str(raw.get("hotspot_cidr", "192.168.50.0/24")),
+            home_gateway=str(raw.get("home_gateway", "") or ""),
             clash_tproxy_port=int(raw.get("clash_tproxy_port", 7896)),
             clash_redir_port=int(raw.get("clash_redir_port", 7895)),
         )
@@ -114,6 +117,7 @@ class Config:
             "lan_cidr": self.lan_cidr,
             "hotspot_iface": self.hotspot_iface,
             "hotspot_cidr": self.hotspot_cidr,
+            "home_gateway": self.home_gateway,
             "clash_tproxy_port": self.clash_tproxy_port,
             "clash_redir_port": self.clash_redir_port,
         }

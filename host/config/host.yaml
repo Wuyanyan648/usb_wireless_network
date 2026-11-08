@@ -50,6 +50,10 @@ lan_cidr: 10.10.10.0/24
 hotspot_iface: wlx6c1ff7f46d6d
 hotspot_cidr: 192.168.50.0/24
 
+# 开机自动进入家庭网关的判定条件：上游默认网关地址 + 下游网卡有载波
+# 留空则只检查网卡载波
+home_gateway: 192.168.1.1
+
 # Clash 透明代理端口（TPROXY 保留下游真实源 IP）
 clash_tproxy_port: 7896
 clash_redir_port: 7895

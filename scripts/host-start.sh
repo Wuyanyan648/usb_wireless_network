@@ -106,6 +106,19 @@ PY
 
 mkdir -p "$DATA_DIR"
 
+# 已由 systemd 管理：不再重复启动，只按需应用模式
+if systemctl is-active --quiet usbnicd 2>/dev/null; then
+  printf 'usbnicd systemd 服务已在运行: %s\n' "$URL"
+  if [[ -n $MODE ]]; then
+    printf '应用网络模式: %s\n' "$MODE"
+    apply_mode "$MODE"
+  fi
+  if command -v xdg-open >/dev/null 2>&1 && [[ -n ${DISPLAY:-}${WAYLAND_DISPLAY:-} ]]; then
+    xdg-open "$URL" >/dev/null 2>&1 || true
+  fi
+  exit 0
+fi
+
 # 已有实例：直接复用；带模式参数时补一次模式切换
 if [[ -f $PID_FILE ]]; then
   old_pid=$(cat "$PID_FILE" 2>/dev/null || true)

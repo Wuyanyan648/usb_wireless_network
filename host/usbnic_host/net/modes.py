@@ -115,7 +115,14 @@ def _enable_forward(config: Config) -> dict[str, Any]:
     return _step("ip_forward", rc == 0, err.strip() if rc != 0 else "已开启 IPv4 转发")
 
 
-def apply_mode(config: Config, mode: str) -> dict[str, Any]:
+def apply_mode(
+    config: Config, mode: str, proxy: bool | None = None
+) -> dict[str, Any]:
+    """应用网络模式。
+
+    proxy 为 None 时按模式默认值决定是否开启代理；为 False 时可显式保持关闭
+    （开机自动进入家庭网关时使用），此时 Clash 未运行也不视为失败。
+    """
     if mode not in MODES:
         return {"ok": False, "mode": mode, "error": "未知模式", "steps": []}
 
@@ -138,15 +145,26 @@ def apply_mode(config: Config, mode: str) -> dict[str, Any]:
         steps.append(_enable_forward(config))
         steps.append(_up(config.gateway_connection))
 
-    proxy_enable = MODE_PROXY[mode]
-    proxy = set_proxy(config, proxy_enable, mode)
-    steps.append(
-        _step(
-            "proxy",
-            bool(proxy.get("ok")),
-            "" if proxy.get("ok") else str(proxy.get("error") or "代理切换失败"),
+    proxy_enable = MODE_PROXY[mode] if proxy is None else proxy
+    proxy_result = set_proxy(config, proxy_enable, mode)
+    proxy_ok = bool(proxy_result.get("ok"))
+    if proxy is False:
+        # 开机默认不开代理；Clash 还没启动导致关闭失败不算模式失败
+        steps.append(
+            _step(
+                "proxy",
+                True,
+                "" if proxy_ok else "Clash 未运行，跳过关闭代理",
+            )
         )
-    )
+    else:
+        steps.append(
+            _step(
+                "proxy",
+                proxy_ok,
+                "" if proxy_ok else str(proxy_result.get("error") or "代理切换失败"),
+            )
+        )
 
     ok = all(step["ok"] for step in steps)
-    return {"ok": ok, "mode": mode, "steps": steps, "proxy": proxy}
+    return {"ok": ok, "mode": mode, "steps": steps, "proxy": proxy_result}

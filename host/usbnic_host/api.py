@@ -23,6 +23,8 @@ class ProxyToggleRequest(BaseModel):
 
 class ModeRequest(BaseModel):
     mode: str
+    # None: 按模式默认值；false: 切换模式但不开启代理（开机场景）
+    proxy: bool | None = None
 
 
 def create_app(monitor: Monitor, config: Config) -> FastAPI:
@@ -113,7 +115,7 @@ def create_app(monitor: Monitor, config: Config) -> FastAPI:
                 status_code=400,
                 content={"ok": False, "error": f"未知模式: {body.mode}"},
             )
-        result = apply_mode(config, body.mode)
+        result = apply_mode(config, body.mode, body.proxy)
         time.sleep(2.5)
         snapshot = monitor.snapshot()
         return {
