@@ -31,7 +31,8 @@ class Monitor:
         self._last_proxy_active: bool | None = None
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._loop, name="usbnic-monitor", daemon=True)
-        self.device_tracker = DeviceTracker(offline_after=180.0)
+        # DHCP 租约设备可能长时间空闲，保留 10 分钟再移出列表
+        self.device_tracker = DeviceTracker(offline_after=600.0)
         self.health_checker = HealthChecker(config)
         self.storage = Storage(config)
 
