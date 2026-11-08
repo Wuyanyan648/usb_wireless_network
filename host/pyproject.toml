@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "usbnic-host"
+version = "0.1.0"
+description = "usbnic 上位机：网络状态监控与模式管理"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.101",
+  "uvicorn>=0.27",
+  "psutil>=5.9",
+  "PyYAML>=6.0",
+]
+
+[project.scripts]
+usbnic-host = "usbnic_host.daemon:main"
+
+[tool.setuptools.packages.find]
+include = ["usbnic_host*"]
+
+[tool.setuptools.package-data]
+usbnic_host = ["web/*"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+testpaths = ["tests"]

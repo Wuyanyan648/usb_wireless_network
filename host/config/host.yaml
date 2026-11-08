@@ -1,0 +1,38 @@
+# usbnic 上位机配置（Phase 1：只读监控）
+# 生产安装时复制到 /etc/usbnic/host.yaml，并把 data_dir 改成 /var/lib/usbnic
+
+bind: 127.0.0.1
+port: 8787
+
+# 采集间隔（秒）
+poll_interval: 2.0
+health_interval: 5.0
+
+# SQLite 历史保留时长（分钟）
+history_minutes: 60
+
+# 相对路径按本配置文件所在目录解析
+data_dir: ../data
+
+# Clash Verge 的 external-controller
+clash_api: http://127.0.0.1:9097
+# clash_secret: ""
+
+# IEEE OUI 数据库，用于识别 Nintendo / 厂商
+oui_file: /usr/share/ieee-data/oui.txt
+
+# 额外参与健康探测的上行候选；默认路由接口始终会被探测
+uplink_candidates:
+  - enp49s0
+  - wlp0s20f3
+
+# 不作为上行探测的接口
+exclude_interfaces:
+  - lo
+  - tailscale0
+
+public_targets:
+  - 223.5.5.5
+  - 1.1.1.1
+
+dns_target: www.baidu.com

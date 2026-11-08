@@ -1,0 +1,17 @@
+[Unit]
+Description=usbnic host monitor daemon
+Documentation=https://github.com/Wuyanyan648/usb_wireless_network
+After=network-online.target NetworkManager.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/usr/local/lib/usbnic/host
+ExecStart=/usr/bin/python3 -m usbnic_host.daemon --config /etc/usbnic/host.yaml
+Restart=on-failure
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target
