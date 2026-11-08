@@ -242,10 +242,13 @@ class Monitor:
         if not routes:
             warnings.append("当前没有 IPv4 默认路由，PC 自身无法上网")
         elif len(routes) > 1:
+            primary = routes[0]
+            backups = ", ".join(
+                f"{route['dev']}({route['metric']})" for route in routes[1:]
+            )
             warnings.append(
-                "存在多条默认路由（"
-                + ", ".join(f"{r['dev']} metric {r['metric']}" for r in routes)
-                + "），可能发生上行切换"
+                f"当前首选上行 {primary['dev']}（metric {primary['metric']}），"
+                f"备份默认路由: {backups}"
             )
         uplink_iface = uplink.get("interface") or {}
         if uplink_iface.get("usb_id"):
