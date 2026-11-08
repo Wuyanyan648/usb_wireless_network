@@ -11,13 +11,18 @@ from pydantic import BaseModel
 from . import __version__
 from .config import Config
 from .monitor.collector import Monitor
-from .monitor.proxy import set_tun
+from .monitor.proxy import set_proxy
+from .net.modes import MODES, apply_mode
 
 WEB_DIR = Path(__file__).parent / "web"
 
 
 class ProxyToggleRequest(BaseModel):
     enable: bool
+
+
+class ModeRequest(BaseModel):
+    mode: str
 
 
 def create_app(monitor: Monitor, config: Config) -> FastAPI:
@@ -52,8 +57,9 @@ def create_app(monitor: Monitor, config: Config) -> FastAPI:
             "ok": True,
             "version": __version__,
             "ready": bool(snapshot.get("ready")),
-            "mode": snapshot.get("mode", "monitor"),
-            "readonly": True,
+            "mode": snapshot.get("mode", "client"),
+            "mode_label": snapshot.get("mode_label", ""),
+            "readonly": False,
             "uptime": snapshot.get("uptime", 0),
             "server_time": time.time(),
         }
@@ -89,13 +95,33 @@ def create_app(monitor: Monitor, config: Config) -> FastAPI:
 
     @app.post("/api/proxy/toggle")
     def proxy_toggle(body: ProxyToggleRequest) -> dict:
-        result = set_tun(config, body.enable)
+        mode = monitor.snapshot().get("mode", "client")
+        result = set_proxy(config, body.enable, mode)
         # 等采集器完成下一次采样，避免前端拿到切换前的旧状态
         time.sleep(2.2)
         snapshot = monitor.snapshot()
         return {
             "ok": result["ok"],
             "error": result["error"],
+            "proxy": snapshot.get("proxy", {}),
+        }
+
+    @app.post("/api/mode")
+    def mode_switch(body: ModeRequest) -> dict:
+        if body.mode not in MODES:
+            return JSONResponse(
+                status_code=400,
+                content={"ok": False, "error": f"未知模式: {body.mode}"},
+            )
+        result = apply_mode(config, body.mode)
+        time.sleep(2.5)
+        snapshot = monitor.snapshot()
+        return {
+            "ok": result["ok"],
+            "error": "" if result["ok"] else "部分步骤失败",
+            "steps": result.get("steps", []),
+            "mode": snapshot.get("mode", body.mode),
+            "mode_label": snapshot.get("mode_label", ""),
             "proxy": snapshot.get("proxy", {}),
         }
 

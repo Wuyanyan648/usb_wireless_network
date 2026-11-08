@@ -9,6 +9,7 @@ const state = {
   historyIface: "",
   busy: false,
   proxyBusy: false,
+  modeBusy: false,
   lastStatusAt: 0,
 };
 
@@ -150,6 +151,7 @@ async function refresh() {
 function renderAll(status, events) {
   renderSummary(status);
   renderUplink(status);
+  renderModes(status);
   renderWarnings(status);
   renderInterfaces(status);
   renderDevices(status);
@@ -162,8 +164,10 @@ function renderSummary(status) {
   const uplink = status.uplink || {};
   const proxy = status.proxy || {};
   const summary = (status.devices || {}).summary || {};
-  setText("statMode", "只读监控");
-  setText("statModeSub", "Phase 1 不修改网络配置");
+  const modes = status.modes || {};
+  const activeMode = (modes.items || []).find((item) => item.active) || {};
+  setText("statMode", status.mode_label || activeMode.label || "--");
+  setText("statModeSub", activeMode.desc || "--");
   setText("statUplink", uplink.dev || "无");
   setText(
     "statUplinkSub",
@@ -173,20 +177,21 @@ function renderSummary(status) {
   );
 
   const proxyText = {
-    active: "TUN 已接管",
+    active: proxy.mode === "tproxy" ? "TPROXY 已接管" : "TUN 已接管",
     clash_only: "Clash 在线",
     tun_only: "TUN 存在",
     off: "未开启",
   }[proxy.status] || "未知";
   setText("statProxy", proxyText);
-  setText(
-    "statProxySub",
-    proxy.clash_ok
-      ? `${proxy.active_connections || 0} 活跃连接 · ↓${fmtBytes(
-          proxy.download_total
-        )} ↑${fmtBytes(proxy.upload_total)}`
-      : proxy.error || "Clash API 不可用"
-  );
+  const proxyDetail = [];
+  if (proxy.clash_ok) {
+    proxyDetail.push(`${proxy.active_connections || 0} 活跃连接`);
+    if (proxy.tproxy) proxyDetail.push(`下游 ${proxy.downstream_connections || 0} 条`);
+    proxyDetail.push(`↓${fmtBytes(proxy.download_total)} ↑${fmtBytes(proxy.upload_total)}`);
+  } else {
+    proxyDetail.push(proxy.error || "Clash API 不可用");
+  }
+  setText("statProxySub", proxyDetail.join(" · "));
 
   const proxyButton = $("proxyToggle");
   if (proxyButton && !state.proxyBusy) {
@@ -282,6 +287,69 @@ function healthLine(label, ok, rtt, detail) {
   value.style.color = "var(--faint)";
   line.appendChild(value);
   return line;
+}
+
+function renderModes(status) {
+  const list = $("modeList");
+  if (!list) return;
+  const items = ((status.modes || {}).items || []);
+  list.replaceChildren();
+  if (!items.length) {
+    list.appendChild(el("div", "empty-small", "暂无模式信息"));
+    return;
+  }
+  for (const item of items) {
+    const row = el("div", `mode-item${item.active ? " active" : ""}`);
+    const text = el("div", "mode-text");
+    text.appendChild(el("strong", "", item.label));
+    text.appendChild(el("span", "", item.desc));
+    row.appendChild(text);
+
+    const button = el(
+      "button",
+      `mode-btn${item.active ? " active" : ""}`,
+      state.modeBusy ? "切换中…" : item.active ? "当前" : "切换"
+    );
+    button.type = "button";
+    button.disabled = state.modeBusy || item.active;
+    button.addEventListener("click", () => toggleMode(item.key));
+    row.appendChild(button);
+    list.appendChild(row);
+  }
+}
+
+async function toggleMode(mode) {
+  if (state.modeBusy) return;
+  const items = ((state.status || {}).modes || {}).items || [];
+  const target = items.find((item) => item.key === mode);
+  const label = target ? target.label : mode;
+  if (!confirm(`切换到「${label}」会修改本机网络配置，继续？`)) return;
+
+  state.modeBusy = true;
+  setText("modeHint", "切换中，请稍候…");
+  if (state.status) renderModes(state.status);
+  try {
+    const response = await fetch("/api/mode", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode }),
+    });
+    const data = await response.json();
+    if (!data.ok) {
+      const failed = (data.steps || [])
+        .filter((step) => !step.ok)
+        .map((step) => `${step.name}: ${step.detail || "失败"}`)
+        .join("\n");
+      throw new Error(failed || data.error || "切换失败");
+    }
+    await refresh();
+  } catch (error) {
+    alert(`模式切换失败:\n${error.message}`);
+  } finally {
+    state.modeBusy = false;
+    setText("modeHint", "切换后立即生效");
+    if (state.status) renderModes(state.status);
+  }
 }
 
 function renderWarnings(status) {

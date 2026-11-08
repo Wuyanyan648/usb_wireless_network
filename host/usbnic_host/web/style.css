@@ -177,6 +177,12 @@ input {
   background: color-mix(in srgb, var(--accent) 10%, transparent);
 }
 
+.pill-live {
+  color: var(--green, #4ade80);
+  border-color: color-mix(in srgb, var(--green, #4ade80) 36%, var(--border));
+  background: color-mix(in srgb, var(--green, #4ade80) 10%, transparent);
+}
+
 .warning-bar {
   display: flex;
   flex-wrap: wrap;
@@ -795,6 +801,41 @@ input {
 .mode-text span {
   color: var(--faint);
   font-size: 11px;
+}
+
+.mode-item.active {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  background: color-mix(in srgb, var(--accent) 8%, var(--panel-2));
+}
+
+.mode-btn {
+  flex: 0 0 auto;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, opacity 120ms ease;
+}
+
+.mode-btn:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.mode-btn.active {
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--border));
+  background: color-mix(in srgb, var(--accent) 12%, var(--panel));
+  color: var(--accent);
+  cursor: default;
+}
+
+.mode-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
 }
 
 .footer {

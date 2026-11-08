@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+import ipaddress
 import os
 import threading
 import time
@@ -9,15 +10,17 @@ from typing import Any
 from .. import __version__
 from ..config import Config
 from ..net.interfaces import get_default_routes, get_interfaces, route_get_dev
+from ..net.modes import detect_mode, mode_info
 from ..util import hostname, load_average, uptime_seconds
 from .devices import DeviceTracker, build_devices
 from .health import HealthChecker
+from .proxy import tproxy_active
 from .sources import get_clash, get_dhcp_leases, get_neigh, get_wifi_stations
 from .storage import Storage
 
 
 class Monitor:
-    """后台采集器：Phase 1 只读，不修改任何网络配置。"""
+    """后台采集器：采集网络与设备状态，网络变更由模式/代理接口触发。"""
 
     def __init__(self, config: Config) -> None:
         self.config = config
@@ -38,7 +41,7 @@ class Monitor:
 
     def start(self) -> None:
         self.storage.init()
-        self.storage.add_event("info", "监控服务启动（只读模式）")
+        self.storage.add_event("info", "上位机服务启动")
         self._thread.start()
 
     def stop(self) -> None:
@@ -108,7 +111,9 @@ class Monitor:
         }
 
         uplink = self._build_uplink(interfaces, routes, health=self._health)
-        proxy = self._build_proxy(interfaces, routes, clash)
+        mode = detect_mode(self.config, interfaces)
+        modes = mode_info(self.config, interfaces)
+        proxy = self._build_proxy(interfaces, routes, clash, mode)
         warnings = self._build_warnings(
             interfaces, routes, uplink, proxy, leases, devices_summary
         )
@@ -122,8 +127,10 @@ class Monitor:
             "hostname": hostname(),
             "uptime": uptime_seconds(),
             "load": load_average(),
-            "mode": "monitor",
-            "readonly": True,
+            "mode": mode,
+            "mode_label": modes["label"],
+            "modes": modes,
+            "readonly": False,
             "uplink": uplink,
             "default_routes": routes,
             "interfaces": interfaces,
@@ -190,6 +197,7 @@ class Monitor:
         interfaces: list[dict[str, Any]],
         routes: list[dict[str, Any]],
         clash: dict[str, Any],
+        mode: str,
     ) -> dict[str, Any]:
         tun = next(
             (
@@ -205,27 +213,56 @@ class Monitor:
         # Clash TUN 的默认路由在独立策略表 2022，main 表里看不到，
         # 用实际路由查询判断当前流量是否进入 TUN。
         default_via_tun = bool(tun_name) and route_get_dev("1.1.1.1") == tun_name
+        tproxy = tproxy_active()
         clash_ok = bool(clash.get("ok"))
         active_connections = len(clash.get("connections") or [])
-        if clash_ok and default_via_tun:
+        downstream_connections = self._count_downstream(clash, mode)
+        if tproxy:
             status = "active"
+            proxy_mode = "tproxy"
+        elif clash_ok and default_via_tun:
+            status = "active"
+            proxy_mode = "tun"
         elif clash_ok:
             status = "clash_only"
+            proxy_mode = "off"
         elif tun_name:
             status = "tun_only"
+            proxy_mode = "off"
         else:
             status = "off"
+            proxy_mode = "off"
         return {
             "status": status,
+            "mode": proxy_mode,
+            "tproxy": tproxy,
             "tun": tun_name,
             "default_via_tun": default_via_tun,
             "clash_ok": clash_ok,
             "error": clash.get("error") or "",
             "active_connections": active_connections,
+            "downstream_connections": downstream_connections,
             "upload_total": int(clash.get("upload_total") or 0),
             "download_total": int(clash.get("download_total") or 0),
             "memory": int(clash.get("memory") or 0),
         }
+
+    def _count_downstream(self, clash: dict[str, Any], mode: str) -> int:
+        cidr = self.config.hotspot_cidr if mode == "hotspot" else self.config.lan_cidr
+        try:
+            lan = ipaddress.ip_network(cidr, strict=False)
+        except ValueError:
+            return 0
+        count = 0
+        for connection in clash.get("connections") or []:
+            source = str(connection.get("source_ip") or "")
+            try:
+                address = ipaddress.ip_address(source)
+            except ValueError:
+                continue
+            if address in lan and source != cidr.split("/")[0]:
+                count += 1
+        return count
 
     def _build_warnings(
         self,
@@ -253,7 +290,7 @@ class Monitor:
         uplink_iface = uplink.get("interface") or {}
         if uplink_iface.get("usb_id"):
             warnings.append(
-                f"当前默认上行是 USB 网卡 {uplink_iface.get('name')}；模式 3 需要把它改为下游 shared 网关"
+                f"当前默认上行是 USB 网卡 {uplink_iface.get('name')}；家庭网关模式需要把它改为下游 shared 网关"
             )
         health = uplink.get("health") or {}
         if health.get("internet_ok") is False:
@@ -275,8 +312,8 @@ class Monitor:
                 + ", ".join(ipv6_interfaces[:3])
                 + "）；若下游下发 IPv6，可能绕过 Clash 代理"
             )
-        if proxy.get("status") != "active":
-            warnings.append("Clash TUN 未处于活动状态；下游设备暂时无法共享代理")
+        if shared_gateway and proxy.get("status") != "active":
+            warnings.append("透明代理未开启；下游设备不会经过 Clash")
         if devices_summary.get("total", 0) == 0:
             warnings.append("暂未发现下游设备；接入设备后这里会显示 IP/MAC/流量")
         return warnings
@@ -318,6 +355,6 @@ class Monitor:
         if self._last_proxy_active is not None and current_proxy != self._last_proxy_active:
             self.storage.add_event(
                 "info",
-                "Clash TUN 已接管转发流量" if current_proxy else "Clash TUN 已停止接管",
+                "透明代理已开启" if current_proxy else "透明代理已关闭",
             )
         self._last_proxy_active = current_proxy

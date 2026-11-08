@@ -11,7 +11,7 @@ def which(command: str) -> str | None:
 
 
 def run(
-    argv: list[str], timeout: float = 3.0
+    argv: list[str], timeout: float = 3.0, input_text: str | None = None
 ) -> tuple[int, str, str]:
     """执行外部命令，永远不经过 shell，返回 (rc, stdout, stderr)。"""
     if not argv:
@@ -26,6 +26,7 @@ def run(
             errors="replace",
             timeout=timeout,
             check=False,
+            input=input_text,
         )
         return proc.returncode, proc.stdout, proc.stderr
     except subprocess.TimeoutExpired:

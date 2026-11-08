@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>usbnic 上位机 · 只读监控</title>
+  <title>usbnic 上位机 · 网络控制</title>
   <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
@@ -21,7 +21,7 @@
         <span id="serviceText">连接中</span>
         <span class="divider"></span>
         <span class="muted" id="lastUpdate">--</span>
-        <span class="pill pill-readonly">只读</span>
+        <span class="pill pill-live">可控</span>
       </div>
     </header>
 
@@ -29,9 +29,9 @@
 
     <section class="summary-grid">
       <article class="card stat-card">
-        <div class="stat-label">当前角色</div>
-        <div class="stat-value" id="statMode">只读监控</div>
-        <div class="stat-sub" id="statModeSub">Phase 1 不改网络</div>
+        <div class="stat-label">当前模式</div>
+        <div class="stat-value" id="statMode">--</div>
+        <div class="stat-sub" id="statModeSub">--</div>
       </article>
       <article class="card stat-card">
         <div class="stat-label">默认上行</div>
@@ -166,38 +166,16 @@
 
       <section class="card">
         <div class="card-head">
-          <h2>模式</h2>
-          <span class="hint">Phase 2-4</span>
+          <h2>网络模式</h2>
+          <span class="hint" id="modeHint">切换后立即生效</span>
         </div>
-        <div class="mode-list">
-          <div class="mode-item">
-            <div class="mode-text">
-              <strong>默认客户端</strong>
-              <span>有线优先 / WiFi 兜底，不做 NAT</span>
-            </div>
-            <span class="pill">Phase 2</span>
-          </div>
-          <div class="mode-item">
-            <div class="mode-text">
-              <strong>USB WiFi AP</strong>
-              <span>USB 无线网卡开热点转发</span>
-            </div>
-            <span class="pill">Phase 3</span>
-          </div>
-          <div class="mode-item">
-            <div class="mode-text">
-              <strong>光猫网关</strong>
-              <span>单层 NAT + Clash TUN 全局代理</span>
-            </div>
-            <span class="pill">Phase 4</span>
-          </div>
-        </div>
+        <div class="mode-list" id="modeList"></div>
       </section>
     </div>
 
     <footer class="footer">
       <span>usbnic-host <span id="version">--</span></span>
-      <span>只读监控，不会修改网络配置</span>
+      <span>切换模式与代理会修改本机网络配置</span>
     </footer>
   </div>
 

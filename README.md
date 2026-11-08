@@ -3,6 +3,8 @@
 针对 `0bda:8156`（Realtek RTL8156B，2.5G USB 有线网卡，驱动 `r8152`）的完整命令行工具：
 设备识别、链路管理、硬件卸载调优、吞吐/稳定性测试、NetworkManager 配置、开机与热插拔持久化，以及用 Wi-Fi 网卡开热点。
 
+`host/` 还提供一个本机 Web 控制台：实时监控上行与设备，并在「默认客户端 / USB WiFi AP / 家庭网关」三种网络模式之间切换；透明代理支持 TPROXY，保留下游设备真实源 IP，便于按设备查看代理链路。
+
 > 注意：`0bda:8156` 是**有线**网卡，没有射频模块，本身不能开 Wi-Fi 热点。
 > 热点功能使用机器上的 Wi-Fi 网卡（例如同 USB 集线器上的 `0bda:c811`，属 RTL8811CU/8821CU 家族，驱动 `rtw88_8821cu`），8156 作为有线上行。
 
@@ -17,6 +19,9 @@ lib/bench.sh            iperf3 吞吐测试、稳定性压测
 lib/persist.sh          NetworkManager 配置、USB 复位、持久化
 lib/hotspot.sh          Wi-Fi 热点（NetworkManager shared 模式）
 config/usbnic.conf      /etc/usbnic/usbnic.conf 模板
+host/                   上位机 Web 控制台（FastAPI + 仪表盘）
+scripts/host-start.sh   启动上位机
+scripts/host-stop.sh    停止上位机
 systemd/                开机自动调优服务
 udev/                   热插拔触发规则
 scripts/install.sh      安装 / 卸载
@@ -280,6 +285,78 @@ PROFILE=balanced
 ```bash
 sudo systemctl restart usbnic-tune.service
 ```
+
+## 上位机（Web 控制台）
+
+`host/` 是运行在本机的 FastAPI 控制台，默认监听 `http://127.0.0.1:8787`，用于查看上行健康、接口吞吐、在线设备，并在三种网络模式之间切换。
+
+```bash
+# 一键启动（非 root 会自动用 pkexec 提权）
+scripts/host-start.sh              # 只启动控制台
+scripts/host-start.sh gateway      # 启动并切到家庭网关
+scripts/host-start.sh hotspot      # 启动并切到 USB WiFi AP
+scripts/host-start.sh client       # 启动并切到默认客户端
+
+# 一键停止：停进程并清理 nftables / 策略路由 / 由上位机开启的代理
+scripts/host-stop.sh
+
+# 运行测试
+cd host && python3 -m pytest -q
+```
+
+启动前会自动清理上次残留的 nftables 表和策略路由，避免规则叠加导致启动失败；停止时如果代理是上位机开启的，会同时关闭 TUN / TPROXY。网关或热点连接本身保持现状，需要断开时在页面切到「默认客户端」。
+
+依赖：`python3-fastapi`、`python3-uvicorn`、`python3-psutil`、`python3-yaml`，以及 `NetworkManager`、`nftables`。
+
+### 三种网络模式
+
+面板上的「网络模式」卡片可直接切换，对应接口 `POST /api/mode`。
+
+| 模式 | 本机 | 下游设备 | 代理 |
+| --- | --- | --- | --- |
+| 默认客户端 | 有线优先、WiFi 兜底，不做 NAT | 无 | 默认关闭，可手动开启 TUN |
+| USB WiFi AP | 板载 WiFi / 有线上网 | USB 无线网卡热点 `192.168.50.0/24` | 本机 TUN + 下游 TPROXY |
+| 家庭网关 | 有线接光猫 | USB 有线网卡共享 `10.10.10.0/24` | 本机 TUN + 下游 TPROXY |
+
+模式底层操作以下 NetworkManager 连接：
+
+- `usbnic-uplink`：有线上行，默认客户端模式优先使用
+- `usbnic-hotspot`：USB 无线网卡热点
+- `usbnic-gateway`：USB 有线网卡共享网关
+
+切换时会同步 `connection.autoconnect`，避免离开家后网关或热点被自动拉起。
+
+### 透明代理
+
+代理开关在「代理状态」卡片，对应接口 `POST /api/proxy/toggle`。
+
+- **家庭网关 / USB WiFi AP**：用 `TPROXY`（nftables + 策略路由）接管下游转发流量，Clash 能看到设备真实源 IP（`10.10.10.x` / `192.168.50.x`），因此可以按设备查看代理链路；同时开启 TUN 代理本机流量。
+- **默认客户端**：只开 TUN 代理本机。
+
+TPROXY 只匹配配置中的下游接口与网段，LAN 互访和上游光猫网段保持直连。关闭代理时会同时清理 nftables 规则、策略路由和 TUN。由于 TPROXY 在 `prerouting/mangle` 阶段就截获下游包，早于 TUN 的路由决策，两者可以同时开启而不会互相抢流量。
+
+### 配置
+
+配置文件 `host/config/host.yaml`，主要项：
+
+```yaml
+bind: 127.0.0.1
+port: 8787
+clash_api: http://127.0.0.1:9097
+
+uplink_connection: usbnic-uplink
+gateway_connection: usbnic-gateway
+hotspot_connection: usbnic-hotspot
+
+gateway_iface: enx6c1ff7d02c4a
+lan_cidr: 10.10.10.0/24
+hotspot_iface: wlx6c1ff7f46d6d
+hotspot_cidr: 192.168.50.0/24
+
+clash_tproxy_port: 7896
+```
+
+设备别名通过 `device_aliases`（MAC → 名称）配置；`device_aliases` 里的 MAC 必须是设备当前实际地址，开启「私有 Wi-Fi 地址」后会变化。
 
 ## 设备能力边界
 

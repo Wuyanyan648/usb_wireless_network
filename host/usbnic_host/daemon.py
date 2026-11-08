@@ -17,7 +17,7 @@ DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "config" / "host.yaml"
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="usbnic 上位机只读监控服务")
+    parser = argparse.ArgumentParser(description="usbnic 上位机服务")
     parser.add_argument(
         "--config",
         default=str(DEFAULT_CONFIG),
@@ -65,7 +65,7 @@ def main(argv: list[str] | None = None) -> int:
     app = create_app(monitor, config)
 
     logger.info("usbnic 上位机 %s 启动: http://%s:%s", __version__, config.bind, config.port)
-    logger.info("只读模式：不会修改任何网络配置")
+    logger.info("支持网络模式切换与透明代理控制")
     logger.info("数据目录: %s", config.data_dir)
 
     try:

@@ -9,7 +9,7 @@ import yaml
 
 @dataclass
 class Config:
-    """上位机运行配置。所有网络操作在 Phase 1 都不执行，这里只存采集参数。"""
+    """上位机运行配置：采集参数与三种网络模式使用的连接名。"""
 
     bind: str = "127.0.0.1"
     port: int = 8787
@@ -32,6 +32,16 @@ class Config:
     http_timeout: float = 1.5
     log_level: str = "info"
     device_aliases: dict[str, str] = field(default_factory=dict)
+    # 三种网络模式使用的 NetworkManager 连接名与下游网关参数
+    uplink_connection: str = "usbnic-uplink"
+    gateway_connection: str = "usbnic-gateway"
+    hotspot_connection: str = "usbnic-hotspot"
+    gateway_iface: str = ""
+    lan_cidr: str = "10.10.10.0/24"
+    hotspot_iface: str = ""
+    hotspot_cidr: str = "192.168.50.0/24"
+    clash_tproxy_port: int = 7896
+    clash_redir_port: int = 7895
 
     @classmethod
     def load(cls, path: str | Path) -> "Config":
@@ -70,6 +80,15 @@ class Config:
                 str(key).lower().replace("-", ":"): str(value)
                 for key, value in (raw.get("device_aliases") or {}).items()
             },
+            uplink_connection=str(raw.get("uplink_connection", "usbnic-uplink")),
+            gateway_connection=str(raw.get("gateway_connection", "usbnic-gateway")),
+            hotspot_connection=str(raw.get("hotspot_connection", "usbnic-hotspot")),
+            gateway_iface=str(raw.get("gateway_iface", "") or ""),
+            lan_cidr=str(raw.get("lan_cidr", "10.10.10.0/24")),
+            hotspot_iface=str(raw.get("hotspot_iface", "") or ""),
+            hotspot_cidr=str(raw.get("hotspot_cidr", "192.168.50.0/24")),
+            clash_tproxy_port=int(raw.get("clash_tproxy_port", 7896)),
+            clash_redir_port=int(raw.get("clash_redir_port", 7895)),
         )
         cfg.data_dir.mkdir(parents=True, exist_ok=True)
         return cfg
@@ -88,4 +107,13 @@ class Config:
             "exclude_interfaces": list(self.exclude_interfaces),
             "public_targets": list(self.public_targets),
             "dns_target": self.dns_target,
+            "uplink_connection": self.uplink_connection,
+            "gateway_connection": self.gateway_connection,
+            "hotspot_connection": self.hotspot_connection,
+            "gateway_iface": self.gateway_iface,
+            "lan_cidr": self.lan_cidr,
+            "hotspot_iface": self.hotspot_iface,
+            "hotspot_cidr": self.hotspot_cidr,
+            "clash_tproxy_port": self.clash_tproxy_port,
+            "clash_redir_port": self.clash_redir_port,
         }

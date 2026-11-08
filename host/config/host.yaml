@@ -37,6 +37,23 @@ public_targets:
 
 dns_target: www.baidu.com
 
+# 三种网络模式对应的 NetworkManager 连接
+uplink_connection: usbnic-uplink        # 有线上行（默认客户端模式优先使用）
+gateway_connection: usbnic-gateway      # USB 网卡共享 10.10.10.1/24
+hotspot_connection: usbnic-hotspot      # USB 无线网卡开热点
+
+# 家庭网关模式：下游接口与网段
+gateway_iface: enx6c1ff7d02c4a
+lan_cidr: 10.10.10.0/24
+
+# USB WiFi AP 模式：USB 无线网卡与热点网段
+hotspot_iface: wlx6c1ff7f46d6d
+hotspot_cidr: 192.168.50.0/24
+
+# Clash 透明代理端口（TPROXY 保留下游真实源 IP）
+clash_tproxy_port: 7896
+clash_redir_port: 7895
+
 # 设备别名：MAC -> 显示名称。MAC 必须是当前实际地址。
 # 手机/iPad 如果重新开启“私有 Wi-Fi 地址”，MAC 会变化，需要同步更新。
 device_aliases:
