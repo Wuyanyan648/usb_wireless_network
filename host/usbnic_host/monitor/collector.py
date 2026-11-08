@@ -8,7 +8,7 @@ from typing import Any
 
 from .. import __version__
 from ..config import Config
-from ..net.interfaces import get_default_routes, get_interfaces
+from ..net.interfaces import get_default_routes, get_interfaces, route_get_dev
 from ..util import hostname, load_average, uptime_seconds
 from .devices import DeviceTracker, build_devices
 from .health import HealthChecker
@@ -202,9 +202,9 @@ class Monitor:
             None,
         )
         tun_name = tun["name"] if tun else ""
-        default_via_tun = bool(tun_name) and any(
-            route.get("dev") == tun_name for route in routes
-        )
+        # Clash TUN 的默认路由在独立策略表 2022，main 表里看不到，
+        # 用实际路由查询判断当前流量是否进入 TUN。
+        default_via_tun = bool(tun_name) and route_get_dev("1.1.1.1") == tun_name
         clash_ok = bool(clash.get("ok"))
         active_connections = len(clash.get("connections") or [])
         if clash_ok and default_via_tun:

@@ -180,7 +180,7 @@ def _iface_type(name: str, has_device: bool) -> str:
     if (SYS_NET / name / "phy80211").exists():
         return "wifi"
     lower = name.lower()
-    if lower.startswith(("tun", "tap", "wg", "tailscale", "utun")):
+    if lower.startswith(("tun", "tap", "wg", "tailscale", "utun", "meta", "clash")):
         return "vpn"
     if has_device:
         return "ethernet"
@@ -281,3 +281,14 @@ def get_interface_gateway(name: str) -> str:
             if isinstance(item, dict) and item.get("dst") == "default":
                 return str(item.get("gateway") or "")
     return ""
+
+
+def route_get_dev(target: str = "1.1.1.1") -> str:
+    """按当前策略路由查询目标实际走的设备，用于识别 Clash TUN。"""
+    data = run_json(["ip", "-j", "route", "get", target], timeout=1.0)
+    item: dict[str, Any] | None = None
+    if isinstance(data, list) and data:
+        item = data[0] if isinstance(data[0], dict) else None
+    elif isinstance(data, dict):
+        item = data
+    return str(item.get("dev") or "") if item else ""

@@ -6,12 +6,18 @@ from pathlib import Path
 from fastapi import FastAPI, Query
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
 
 from . import __version__
 from .config import Config
 from .monitor.collector import Monitor
+from .monitor.proxy import set_tun
 
 WEB_DIR = Path(__file__).parent / "web"
+
+
+class ProxyToggleRequest(BaseModel):
+    enable: bool
 
 
 def create_app(monitor: Monitor, config: Config) -> FastAPI:
@@ -80,5 +86,17 @@ def create_app(monitor: Monitor, config: Config) -> FastAPI:
     @app.get("/api/config")
     def public_config() -> dict:
         return config.public_dict()
+
+    @app.post("/api/proxy/toggle")
+    def proxy_toggle(body: ProxyToggleRequest) -> dict:
+        result = set_tun(config, body.enable)
+        # 等采集器完成下一次采样，避免前端拿到切换前的旧状态
+        time.sleep(2.2)
+        snapshot = monitor.snapshot()
+        return {
+            "ok": result["ok"],
+            "error": result["error"],
+            "proxy": snapshot.get("proxy", {}),
+        }
 
     return app

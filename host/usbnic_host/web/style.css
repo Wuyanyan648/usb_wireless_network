@@ -261,6 +261,37 @@ input {
   text-overflow: ellipsis;
 }
 
+.proxy-btn {
+  width: 100%;
+  margin-top: 12px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, opacity 120ms ease;
+}
+
+.proxy-btn.off {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #ffffff;
+}
+
+.proxy-btn.on {
+  background: color-mix(in srgb, var(--red) 14%, var(--panel-2));
+  border-color: color-mix(in srgb, var(--red) 46%, var(--border));
+  color: var(--red);
+}
+
+.proxy-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
 .grid-main {
   display: grid;
   grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.9fr);

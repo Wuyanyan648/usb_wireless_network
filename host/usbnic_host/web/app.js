@@ -8,6 +8,7 @@ const state = {
   chart: null,
   historyIface: "",
   busy: false,
+  proxyBusy: false,
   lastStatusAt: 0,
 };
 
@@ -186,6 +187,16 @@ function renderSummary(status) {
         )} ↑${fmtBytes(proxy.upload_total)}`
       : proxy.error || "Clash API 不可用"
   );
+
+  const proxyButton = $("proxyToggle");
+  if (proxyButton && !state.proxyBusy) {
+    const active = proxy.status === "active";
+    proxyButton.textContent = active ? "关闭代理" : "开启代理";
+    proxyButton.dataset.enable = active ? "false" : "true";
+    proxyButton.classList.toggle("on", active);
+    proxyButton.classList.toggle("off", !active);
+    proxyButton.disabled = false;
+  }
 
   setText("statDevices", `${summary.online || 0}/${summary.total || 0}`);
   setText(
@@ -686,6 +697,30 @@ function niceNumber(value) {
   return niceFraction * 10 ** exponent;
 }
 
+async function toggleProxy() {
+  const button = $("proxyToggle");
+  if (!button || state.proxyBusy) return;
+  const enable = button.dataset.enable !== "false";
+  state.proxyBusy = true;
+  button.disabled = true;
+  button.textContent = enable ? "开启中..." : "关闭中...";
+  try {
+    const response = await fetch("/api/proxy/toggle", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enable }),
+    });
+    const data = await response.json();
+    if (!data.ok) throw new Error(data.error || "切换失败");
+    await refresh();
+  } catch (error) {
+    alert(`代理切换失败: ${error.message}`);
+  } finally {
+    state.proxyBusy = false;
+    if (state.status) renderSummary(state.status);
+  }
+}
+
 function bindFilters() {
   const filter = $("deviceFilter");
   if (filter) {
@@ -712,6 +747,8 @@ function bindFilters() {
 function init() {
   state.chart = new TrafficChart($("trafficChart"));
   bindFilters();
+  const proxyButton = $("proxyToggle");
+  if (proxyButton) proxyButton.addEventListener("click", toggleProxy);
   refresh();
   setInterval(refresh, POLL_MS);
   document.addEventListener("visibilitychange", () => {
