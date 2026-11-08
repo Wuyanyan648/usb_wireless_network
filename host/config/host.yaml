@@ -17,6 +17,8 @@ data_dir: ../data
 # Clash Verge 的 external-controller
 clash_api: http://127.0.0.1:9097
 # clash_secret: ""
+# Clash Verge 的 root 服务：开启代理时如果内核没运行，会自动拉起
+clash_service_api: http://127.0.0.1:33211
 
 # IEEE OUI 数据库，用于识别 Nintendo / 厂商
 oui_file: /usr/share/ieee-data/oui.txt

@@ -350,6 +350,8 @@ scripts/install-host-boot.sh --uninstall  # 移除开机自启
 
 TPROXY 只匹配配置中的下游接口与网段，LAN 互访和上游光猫网段保持直连。关闭代理时会同时清理 nftables 规则、策略路由和 TUN。由于 TPROXY 在 `prerouting/mangle` 阶段就截获下游包，早于 TUN 的路由决策，两者可以同时开启而不会互相抢流量。
 
+开启代理时会先检查 Clash 内核：已运行就直接复用；未运行则通过 Clash Verge 的 root 服务自动拉起（`clash_service_api`），所以开机后不需要手动打开 Clash。服务不可用时会尝试直接启动 `verge-mihomo`。
+
 ### 配置
 
 配置文件 `host/config/host.yaml`，主要项：
@@ -358,6 +360,7 @@ TPROXY 只匹配配置中的下游接口与网段，LAN 互访和上游光猫网
 bind: 127.0.0.1
 port: 8787
 clash_api: http://127.0.0.1:9097
+clash_service_api: http://127.0.0.1:33211
 
 uplink_connection: usbnic-uplink
 gateway_connection: usbnic-gateway

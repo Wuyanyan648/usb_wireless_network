@@ -8,6 +8,7 @@ from typing import Any
 
 from ..config import Config
 from ..exec import run
+from .clash import ensure_clash
 
 # nftables 表名与 TPROXY 策略路由表号，统一前缀便于精确清理
 NFT_TABLE = "usbnic"
@@ -100,6 +101,14 @@ def set_proxy(config: Config, enable: bool, mode: str) -> dict[str, Any]:
         if result["ok"]:
             clear_proxy_mark(config)
         return {"ok": result["ok"], "error": result["error"], "steps": [result]}
+    # 内核没运行就自动拉起；已运行则直接复用
+    ensured = ensure_clash(config)
+    if not ensured.get("ok"):
+        return {
+            "ok": False,
+            "error": str(ensured.get("error") or "Clash 启动失败"),
+            "steps": ensured.get("steps", []),
+        }
     if mode == "hotspot":
         result = enable_tproxy(config, config.hotspot_iface, config.hotspot_cidr)
     elif mode == "gateway":

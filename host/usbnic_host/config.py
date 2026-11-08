@@ -18,6 +18,8 @@ class Config:
     history_minutes: int = 60
     data_dir: Path = Path("data")
     clash_api: str = "http://127.0.0.1:9097"
+    # Clash Verge 的 root 服务，用于代理开启时自动拉起内核
+    clash_service_api: str = "http://127.0.0.1:33211"
     clash_secret: str = ""
     oui_file: str = "/usr/share/ieee-data/oui.txt"
     uplink_candidates: list[str] = field(default_factory=list)
@@ -65,6 +67,9 @@ class Config:
             history_minutes=int(raw.get("history_minutes", 60)),
             data_dir=data_dir,
             clash_api=str(raw.get("clash_api", "http://127.0.0.1:9097")).rstrip("/"),
+            clash_service_api=str(
+                raw.get("clash_service_api", "http://127.0.0.1:33211")
+            ).rstrip("/"),
             clash_secret=str(raw.get("clash_secret", "") or ""),
             oui_file=str(raw.get("oui_file", "/usr/share/ieee-data/oui.txt")),
             uplink_candidates=list(raw.get("uplink_candidates", []) or []),
@@ -106,6 +111,7 @@ class Config:
             "history_minutes": self.history_minutes,
             "data_dir": str(self.data_dir),
             "clash_api": self.clash_api,
+            "clash_service_api": self.clash_service_api,
             "uplink_candidates": list(self.uplink_candidates),
             "exclude_interfaces": list(self.exclude_interfaces),
             "public_targets": list(self.public_targets),

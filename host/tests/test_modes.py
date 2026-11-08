@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from usbnic_host.boot import detect_home_gateway
 from usbnic_host.config import Config
+from usbnic_host.monitor.clash import normalize_body
 from usbnic_host.monitor.proxy import tproxy_ruleset
 from usbnic_host.net.modes import MODE_PROXY, detect_mode, mode_info
 
@@ -104,3 +105,16 @@ def test_detect_home_gateway_requires_downstream_carrier() -> None:
         routes_getter=lambda: [{"dev": "enp-test", "gateway": "192.168.1.1"}],
     )
     assert ok is False
+
+
+def test_normalize_clash_start_body() -> None:
+    body = {
+        "bin_path": "/usr/bin/verge-mihomo",
+        "config_dir": "/tmp/clash",
+        "config_file": "/tmp/clash/config.yaml",
+        "log_file": "/tmp/clash/log",
+    }
+    assert normalize_body(body) == body
+    assert normalize_body({}) == {}
+    assert normalize_body({"bin_path": "/usr/bin/verge-mihomo"}) == {}
+    assert normalize_body(None) == {}
