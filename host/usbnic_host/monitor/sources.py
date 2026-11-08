@@ -23,6 +23,11 @@ OUI_RE = re.compile(
 
 _OUI_CACHE: dict[str, dict[str, str]] = {}
 
+# 本机 OUI 库可能落后于新设备，这里补少量已知前缀。
+OUI_OVERRIDES = {
+    "4044f7": "Nintendo Co.,Ltd",
+}
+
 
 def parse_dhcp_leases(paths: list[str]) -> list[dict[str, Any]]:
     leases: list[dict[str, Any]] = []
@@ -262,6 +267,8 @@ def lookup_vendor(mac: str, oui_file: str) -> str:
     if not normalized:
         return ""
     prefix = normalized.replace(":", "")[:6]
+    if prefix in OUI_OVERRIDES:
+        return OUI_OVERRIDES[prefix]
     return load_oui(oui_file).get(prefix, "")
 
 

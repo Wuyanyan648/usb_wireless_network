@@ -36,3 +36,11 @@ public_targets:
   - 1.1.1.1
 
 dns_target: www.baidu.com
+
+# 设备别名：MAC -> 显示名称。MAC 必须是当前实际地址。
+# 手机/iPad 如果重新开启“私有 Wi-Fi 地址”，MAC 会变化，需要同步更新。
+device_aliases:
+  "a6:2b:86:8f:8f:aa": "我的手机"
+  "1e:38:01:58:ff:76": "iPad"
+  # 当前有线活动的 Switch 2；被路由器桥接的旧无线接口会自行过期
+  "40:44:f7:d8:99:c5": "Nintendo Switch 2"

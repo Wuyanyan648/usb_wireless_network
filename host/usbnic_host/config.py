@@ -31,6 +31,7 @@ class Config:
     health_timeout: float = 1.2
     http_timeout: float = 1.5
     log_level: str = "info"
+    device_aliases: dict[str, str] = field(default_factory=dict)
 
     @classmethod
     def load(cls, path: str | Path) -> "Config":
@@ -65,6 +66,10 @@ class Config:
             health_timeout=float(raw.get("health_timeout", 1.2)),
             http_timeout=float(raw.get("http_timeout", 1.5)),
             log_level=str(raw.get("log_level", "info")),
+            device_aliases={
+                str(key).lower().replace("-", ":"): str(value)
+                for key, value in (raw.get("device_aliases") or {}).items()
+            },
         )
         cfg.data_dir.mkdir(parents=True, exist_ok=True)
         return cfg

@@ -66,6 +66,12 @@ def test_nintendo_oui() -> None:
     assert short_vendor(vendor) == "Nintendo"
 
 
+def test_nintendo_oui_override() -> None:
+    # 本地 OUI 库可能没有 40:44:F7，代码里补了覆盖项
+    vendor = lookup_vendor("40:44:f7:d8:99:c5", OUI_FILE)
+    assert "Nintendo" in vendor
+
+
 def test_parse_ping() -> None:
     output = (
         "PING 223.5.5.5 (223.5.5.5) 56(84) bytes of data.\n"

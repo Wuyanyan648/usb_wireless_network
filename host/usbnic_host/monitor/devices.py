@@ -222,6 +222,12 @@ def build_devices(
             device["name"] = "路由器 / 网关"
         else:
             device["name"] = "未知设备"
+
+        alias = config.device_aliases.get(mac.lower()) if mac else ""
+        if alias:
+            device["name"] = alias
+            device["alias"] = alias
+
         device["proxy_chains"] = sorted(chain_sets.get(key, set()))
         if not device.get("type"):
             device["type"] = "unknown"

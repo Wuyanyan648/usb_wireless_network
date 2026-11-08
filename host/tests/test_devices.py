@@ -113,6 +113,49 @@ def test_build_devices_merges_sources() -> None:
     assert sorted(phone["proxy_chains"]) == ["JP"]
 
 
+def test_device_alias_overrides_name() -> None:
+    interfaces = [
+        {
+            "name": "enx-test",
+            "type": "ethernet",
+            "ipv4": ["10.10.10.1/24"],
+            "wifi_mode": None,
+        }
+    ]
+    switch_mac = "40:44:f7:d8:99:c5"
+    devices = build_devices(
+        interfaces,
+        [
+            {
+                "mac": switch_mac,
+                "ip": "10.10.10.110",
+                "hostname": "",
+                "expiry": 1900000000,
+            }
+        ],
+        [
+            {
+                "ip": "10.10.10.110",
+                "mac": switch_mac,
+                "dev": "enx-test",
+                "state": "REACHABLE",
+                "router": False,
+            }
+        ],
+        [],
+        {"ok": False, "connections": []},
+        Config(
+            oui_file=OUI_FILE,
+            device_aliases={switch_mac: "Nintendo Switch 2"},
+        ),
+        now_ts=1000.0,
+    )
+    switch = next(d for d in devices.values() if d["mac"] == switch_mac)
+    assert switch["name"] == "Nintendo Switch 2"
+    assert switch["alias"] == "Nintendo Switch 2"
+    assert "Nintendo" in switch["vendor"]
+
+
 def test_device_tracker_keeps_offline_briefly() -> None:
     tracker = DeviceTracker(offline_after=180)
     current = {
