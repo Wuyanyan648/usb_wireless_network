@@ -51,6 +51,8 @@ lan_cidr: 10.10.10.0/24
 # USB WiFi AP 模式：USB 无线网卡与热点网段
 hotspot_iface: wlx6c1ff7f46d6d
 hotspot_cidr: 192.168.50.0/24
+# 热点密码文件：仅 root 可读（0600），由 usbnicd 读取后在面板展示
+hotspot_password_file: /etc/usbnic/hotspot.pass
 
 # 开机自动进入家庭网关的判定条件：上游默认网关地址 + 下游网卡有载波
 # 留空则只检查网卡载波

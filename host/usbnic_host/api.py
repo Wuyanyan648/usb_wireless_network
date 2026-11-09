@@ -17,6 +17,7 @@ from .monitor.clash_proxies import (
     test_delay,
 )
 from .monitor.collector import Monitor
+from .monitor.hotspot import hotspot_info
 from .monitor.proxy import set_proxy
 from .net.modes import MODES, apply_mode
 
@@ -88,6 +89,10 @@ def create_app(monitor: Monitor, config: Config) -> FastAPI:
     @app.get("/api/status")
     def status() -> dict:
         return monitor.snapshot()
+
+    @app.get("/api/hotspot")
+    def hotspot() -> dict:
+        return hotspot_info(config)
 
     @app.get("/api/devices")
     def devices() -> dict:

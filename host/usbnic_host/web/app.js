@@ -17,6 +17,9 @@ const state = {
   proxyFilters: {},
   proxyEls: {},
   proxyGroupBusy: "",
+  hotspot: null,
+  hotspotReveal: false,
+  hotspotPassword: "",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -630,6 +633,89 @@ async function testProxyGroup(group, button) {
   }
 }
 
+const KEY_MGMT_LABELS = {
+  sae: "WPA3-SAE",
+  "wpa-psk": "WPA2/WPA3",
+  "wpa-eap": "WPA-Enterprise",
+};
+
+const PMF_LABELS = {
+  "0": "默认",
+  "1": "关闭",
+  "2": "可选",
+  "3": "必需",
+};
+
+async function refreshHotspot() {
+  try {
+    state.hotspot = await fetchJSON("/api/hotspot");
+    renderHotspot();
+  } catch (error) {
+    setText("hotspotMeta", `读取失败：${error.message}`);
+  }
+}
+
+function renderHotspot() {
+  const data = state.hotspot;
+  if (!data) return;
+  const revealBtn = $("hotspotReveal");
+  if (!data.available) {
+    setText("hotspotMeta", "未配置热点");
+    setText("hotspotSsid", "--");
+    setText("hotspotState", "--");
+    setText("hotspotSecurity", "--");
+    setText("hotspotCipher", "--");
+    setText("hotspotPassword", "--");
+    setText("hotspotPasswordFile", data.password_file || "--");
+    state.hotspotPassword = "";
+    if (revealBtn) revealBtn.disabled = true;
+    return;
+  }
+  if (revealBtn) revealBtn.disabled = false;
+
+  const security = data.security || {};
+  const keyMgmt = KEY_MGMT_LABELS[security.key_mgmt] || security.key_mgmt || "未设置";
+  const pmf = PMF_LABELS[String(security.pmf)] || security.pmf || "默认";
+  const cipher = security.pairwise || security.group
+    ? `${(security.pairwise || "--").toUpperCase()} / ${(security.group || "--").toUpperCase()}`
+    : "未限制";
+
+  setText("hotspotSsid", data.ssid || "--");
+  setText("hotspotState", data.active ? "已启动" : "未激活");
+  setText("hotspotSecurity", `${keyMgmt} · PMF ${pmf}`);
+  setText("hotspotCipher", cipher);
+
+  state.hotspotPassword = data.password || "";
+  if (state.hotspotPassword) {
+    setText(
+      "hotspotPassword",
+      state.hotspotReveal ? state.hotspotPassword : "•".repeat(Math.min(state.hotspotPassword.length, 16)),
+    );
+  } else {
+    setText("hotspotPassword", "（未读取到）");
+  }
+  setText(
+    "hotspotPasswordFile",
+    data.password_file ? `${data.password_file}${data.password_file_exists ? "" : "（尚未生成）"}` : "--",
+  );
+  setText("hotspotMeta", data.active ? "热点运行中" : "热点未激活");
+  if (revealBtn) revealBtn.textContent = state.hotspotReveal ? "隐藏密码" : "显示密码";
+}
+
+async function copyHotspotPassword() {
+  if (!state.hotspotPassword) {
+    setText("hotspotPasswordHint", "没有可复制的密码");
+    return;
+  }
+  try {
+    await navigator.clipboard.writeText(state.hotspotPassword);
+    setText("hotspotPasswordHint", "已复制到剪贴板");
+  } catch (error) {
+    setText("hotspotPasswordHint", "复制失败，请先显示密码手动复制");
+  }
+  setTimeout(() => setText("hotspotPasswordHint", ""), 2500);
+}
+
 function renderWarnings(status) {
   const bar = $("warningBar");
 
@@ -1099,14 +1185,27 @@ function init() {
   if (proxyButton) proxyButton.addEventListener("click", toggleProxy);
   const proxyRefresh = $("proxyRefresh");
   if (proxyRefresh) proxyRefresh.addEventListener("click", () => refreshProxies(true));
+  const hotspotRefresh = $("hotspotRefresh");
+  if (hotspotRefresh) hotspotRefresh.addEventListener("click", refreshHotspot);
+  const hotspotReveal = $("hotspotReveal");
+  if (hotspotReveal) {
+    hotspotReveal.addEventListener("click", () => {
+      state.hotspotReveal = !state.hotspotReveal;
+      renderHotspot();
+    });
+  }
+  const hotspotCopy = $("hotspotCopy");
+  if (hotspotCopy) hotspotCopy.addEventListener("click", copyHotspotPassword);
   refresh();
   refreshProxies();
+  refreshHotspot();
   setInterval(refresh, POLL_MS);
   setInterval(refreshProxies, PROXY_POLL_MS);
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) {
       refresh();
       refreshProxies();
+      refreshHotspot();
     }
   });
 }

@@ -104,6 +104,29 @@
       </div>
     </section>
 
+    <section class="card hotspot-panel">
+      <div class="card-head">
+        <h2>热点与密码</h2>
+        <div class="table-tools">
+          <span class="hint" id="hotspotMeta">等待热点数据…</span>
+          <button class="ghost-btn" id="hotspotRefresh" type="button">刷新</button>
+        </div>
+      </div>
+      <div class="hotspot-grid">
+        <div class="kv"><span>SSID</span><strong id="hotspotSsid">--</strong></div>
+        <div class="kv"><span>状态</span><strong id="hotspotState">--</strong></div>
+        <div class="kv"><span>认证 / PMF</span><strong id="hotspotSecurity">--</strong></div>
+        <div class="kv"><span>加密套件</span><strong id="hotspotCipher">--</strong></div>
+        <div class="kv"><span>密码</span><strong id="hotspotPassword" class="secret-value">--</strong></div>
+        <div class="kv"><span>密码文件</span><strong id="hotspotPasswordFile" class="secret-value">--</strong></div>
+      </div>
+      <div class="hotspot-actions">
+        <button class="ghost-btn" id="hotspotReveal" type="button">显示密码</button>
+        <button class="ghost-btn" id="hotspotCopy" type="button">复制密码</button>
+        <span class="hint" id="hotspotPasswordHint"></span>
+      </div>
+    </section>
+
     <section class="card">
       <div class="card-head">
         <h2>接口</h2>

@@ -347,6 +347,28 @@ input {
   min-width: 0;
 }
 
+.hotspot-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  column-gap: 28px;
+}
+
+.hotspot-grid .kv strong.secret-value {
+  overflow: visible;
+  white-space: normal;
+  word-break: break-all;
+  text-align: left;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.hotspot-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  flex-wrap: wrap;
+}
+
 .kv {
   display: flex;
   align-items: baseline;

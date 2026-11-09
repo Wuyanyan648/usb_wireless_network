@@ -3,25 +3,40 @@
 # 说明：0bda:8156 是无射频的有线网卡，不能自身发 Wi-Fi。
 
 HOTSPOT_CONN=usbnic-hotspot
+# 明文密码只存本机（仓库外），权限 600；不会进入 git
+HOTSPOT_PASS_FILE=${HOTSPOT_PASS_FILE:-/etc/usbnic/hotspot.pass}
+HOTSPOT_PASS_MIN=20
 
 hotspot_usage() {
   cat <<'EOF'
 用法:
   usbnic hotspot start [选项]      启动热点（不带选项则复用上次配置）
   usbnic hotspot stop              停止热点（保留配置）
-  usbnic hotspot status            查看热点状态与密码
+  usbnic hotspot status            查看热点状态、安全参数与密码
+  usbnic hotspot pass              仅输出当前热点密码（可 > 文件保存）
   usbnic hotspot clients [IFACE]   查看已关联设备的 MAC/IP/信号/速率
 
 选项:
   --wifi IFACE      指定 Wi-Fi 网卡（默认自动选 USB 无线网卡）
   --ssid NAME       热点名称（默认 USB-NIC-xxxx）
-  --pass PASS       密码，8-63 位（不指定则随机生成）
-  --open            开放网络（无密码）
+  --pass PASS       自定义密码；至少 20 位且需含大小写/数字/符号中至少三类
+                    （不指定则自动生成 24 位强密码，并复用已保存的密码）
+  --new-pass        重新生成 24 位强密码并重建热点（密码轮换）
+  --open            开放网络（无密码，强烈不推荐）
   --band bg|a       2.4GHz(bg) 或 5GHz(a)，默认 bg
   --channel N       信道（36 及以上会自动切到 5GHz）
   --gateway IP/PFX  热点网关与网段，默认 10.42.0.1/24
                     例如 --gateway 192.168.50.1/24
   --autostart       开机自动启动热点
+  --ap-isolation    开启 AP 隔离（客户端之间无法互访）
+  --no-ap-isolation 关闭 AP 隔离（默认；投屏/打印机/局域网互访需要）
+  --compat          WPA2/WPA3 过渡模式（key-mgmt wpa-psk，pmf optional）
+                    默认 WPA3-SAE + pmf required，SAE 协商失败会自动回退
+
+安全默认值:
+  key-mgmt=sae、pmf=required(3)、proto=rsn、pairwise=ccmp、group=ccmp、
+  WPS 显式关闭。密码保存在 /etc/usbnic/hotspot.pass（600，仅 root），
+  可用 usbnic hotspot pass 或 usbnic hotspot status 查看。
 
 注意:
   热点是独立内网（默认 10.42.0.0/24，可用 --gateway 修改），
@@ -112,8 +127,60 @@ hotspot_default_wifi() {
   return 1
 }
 
+# 生成 24 位强密码：大小写+数字+符号各至少一个，排除 0O1lI 等易混淆字符
 gen_pass() {
-  od -An -N6 -tx1 /dev/urandom | tr -d ' \n'
+  local upper='ABCDEFGHJKLMNPQRSTUVWXYZ'
+  local lower='abcdefghijkmnopqrstuvwxyz'
+  local digit='23456789'
+  local symbol='!@#%^&*_=+:,.?/'
+  local all="${upper}${lower}${digit}${symbol}"
+  local -a chars=()
+  local set idx
+  for set in "$upper" "$lower" "$digit" "$symbol"; do
+    idx=$(od -An -N1 -tu1 /dev/urandom | tr -d ' \n')
+    chars+=("${set:idx%${#set}:1}")
+  done
+  while (( ${#chars[@]} < 24 )); do
+    idx=$(od -An -N1 -tu1 /dev/urandom | tr -d ' \n')
+    chars+=("${all:idx%${#all}:1}")
+  done
+  printf '%s\n' "$(printf '%s\n' "${chars[@]}" | shuf | tr -d '\n')"
+}
+
+# 弱口令判定：长度不足 20、字符类别少于 3 类、或全部为同一字符
+hotspot_pass_weak() {
+  local p=$1 rest first
+  (( ${#p} < HOTSPOT_PASS_MIN || ${#p} > 63 )) && return 0
+  local classes=0
+  [[ $p == *[a-z]* ]] && ((classes++))
+  [[ $p == *[A-Z]* ]] && ((classes++))
+  [[ $p == *[0-9]* ]] && ((classes++))
+  [[ $p == *[^a-zA-Z0-9]* ]] && ((classes++))
+  (( classes < 3 )) && return 0
+  first=${p:0:1}
+  rest=${p:1}
+  [[ -z ${rest//"$first"/} ]] && return 0
+  return 1
+}
+
+hotspot_pass_load() {
+  [[ -r $HOTSPOT_PASS_FILE ]] || return 1
+  local p
+  p=$(head -n1 "$HOTSPOT_PASS_FILE" 2>/dev/null || true)
+  [[ ${#p} -ge 8 ]] || return 1
+  printf '%s' "$p"
+}
+
+hotspot_pass_save() {
+  local pass=$1 dir
+  dir=$(dirname "$HOTSPOT_PASS_FILE")
+  if ! run install -d -m 700 "$dir"; then
+    return 1
+  fi
+  if ! (umask 077 && printf '%s\n' "$pass" >"$HOTSPOT_PASS_FILE"); then
+    return 1
+  fi
+  chmod 600 "$HOTSPOT_PASS_FILE" 2>/dev/null || true
 }
 
 hotspot_client_count() {
@@ -290,6 +357,7 @@ hotspot_status() {
   fi
 
   local wifi ssid psk band ch auto state ip clients uplink fwd
+  local km proto pair group pmf wps iso
   wifi=$(nmcli -g connection.interface-name connection show "$HOTSPOT_CONN" 2>/dev/null || true)
   ssid=$(nmcli -g 802-11-wireless.ssid connection show "$HOTSPOT_CONN" 2>/dev/null || true)
   psk=$(nmcli -s -g 802-11-wireless-security.psk connection show "$HOTSPOT_CONN" 2>/dev/null || true)
@@ -297,6 +365,13 @@ hotspot_status() {
   ch=$(nmcli -g 802-11-wireless.channel connection show "$HOTSPOT_CONN" 2>/dev/null || true)
   if [[ $ch == 0 ]]; then ch=''; fi
   auto=$(nmcli -g connection.autoconnect connection show "$HOTSPOT_CONN" 2>/dev/null || true)
+  km=$(nmcli -g 802-11-wireless-security.key-mgmt connection show "$HOTSPOT_CONN" 2>/dev/null || true)
+  proto=$(nmcli -g 802-11-wireless-security.proto connection show "$HOTSPOT_CONN" 2>/dev/null || true)
+  pair=$(nmcli -g 802-11-wireless-security.pairwise connection show "$HOTSPOT_CONN" 2>/dev/null || true)
+  group=$(nmcli -g 802-11-wireless-security.group connection show "$HOTSPOT_CONN" 2>/dev/null || true)
+  pmf=$(nmcli -g 802-11-wireless-security.pmf connection show "$HOTSPOT_CONN" 2>/dev/null || true)
+  wps=$(nmcli -g 802-11-wireless-security.wps-method connection show "$HOTSPOT_CONN" 2>/dev/null || true)
+  iso=$(nmcli -g 802-11-wireless.ap-isolation connection show "$HOTSPOT_CONN" 2>/dev/null || true)
   state=$(nmcli -g GENERAL.STATE device show "$wifi" 2>/dev/null || true)
   ip=$(nmcli -g IP4.ADDRESS device show "$wifi" 2>/dev/null || true)
   if [[ -z $ip ]]; then
@@ -309,11 +384,30 @@ hotspot_status() {
   if [[ $clients == '-' ]]; then
     clients_text='未知（需 root 或 iw）'
   fi
+  local pmf_text=$pmf
+  case $pmf in
+    0) pmf_text='default(0)' ;;
+    1) pmf_text='disable(1)' ;;
+    2) pmf_text='optional(2)' ;;
+    3) pmf_text='required(3)' ;;
+  esac
+  local iso_text='关闭'
+  case $iso in
+    yes | 1 | true) iso_text='开启（客户端互访被阻断）' ;;
+    no | 0 | false) iso_text='关闭（允许互访）' ;;
+    *) iso_text='默认（视为关闭）' ;;
+  esac
 
   title "热点状态"
   kv "Wi-Fi 网卡" "$wifi"
   kv "SSID" "$ssid"
-  kv "密码" "${psk:-（开放网络）}"
+  kv "密码" "${psk:-（开放网络，或需 root 读取）}"
+  kv "认证/密钥管理" "${km:--}"
+  kv "PMF (802.11w)" "$pmf_text"
+  kv "协议 (proto)" "${proto:--（未限制）}"
+  kv "单播/组播加密" "${pair:--} / ${group:--}"
+  kv "WPS" "$( case $wps in 1 | 0x1) printf '已关闭' ;; *) printf '%s' "${wps:-默认}" ;; esac )"
+  kv "AP 隔离" "$iso_text"
   kv "频段/信道" "$(band_label "${band:-bg}")${ch:+/$ch}"
   kv "状态" "${state:-未知}"
   kv "网关地址" "${ip:--}"
@@ -327,7 +421,21 @@ hotspot_status() {
   else
     info "热点未激活（sudo usbnic hotspot start 可重新启动）"
   fi
+  info "查看密码: usbnic hotspot pass（或 usbnic hotspot status）"
 }
+
+# 只输出当前热点密码，便于复制或重定向到文件
+hotspot_pass_cmd() {
+  local p
+  if ! p=$(hotspot_pass_load); then
+    p=$(nmcli -s -g 802-11-wireless-security.psk connection show "$HOTSPOT_CONN" 2>/dev/null || true)
+  fi
+  if [[ -z $p ]]; then
+    die "未找到热点密码（$HOTSPOT_PASS_FILE）；请先 sudo usbnic hotspot start"
+  fi
+  printf '%s\n' "$p"
+}
+
 
 hotspot_stop() {
   require_root
@@ -341,8 +449,93 @@ hotspot_stop() {
   ok "热点已停止（配置已保留）"
 }
 
+# 创建热点连接。use_sae=1 用 WPA3-SAE + pmf required；0 用 WPA2/WPA3 过渡模式
+hotspot_build_conn() {
+  local wifi=$1 ssid=$2 band=$3 channel=$4 gateway=$5 autostart=$6 pass=$7 use_sae=$8 isolation=$9
+  local -a args=(connection add type wifi ifname "$wifi" con-name "$HOTSPOT_CONN"
+    ssid "$ssid" 802-11-wireless.mode ap 802-11-wireless.band "$band")
+  if (( autostart )); then
+    args+=(connection.autoconnect yes)
+  else
+    args+=(connection.autoconnect no)
+  fi
+  if [[ -n $channel ]]; then
+    args+=(802-11-wireless.channel "$channel")
+  fi
+  if [[ -n $pass ]]; then
+    args+=(802-11-wireless-security.proto rsn
+      802-11-wireless-security.pairwise ccmp
+      802-11-wireless-security.group ccmp
+      802-11-wireless-security.wps-method 1)
+    if (( use_sae )); then
+      args+=(802-11-wireless-security.key-mgmt sae 802-11-wireless-security.pmf 3)
+    else
+      args+=(802-11-wireless-security.key-mgmt wpa-psk 802-11-wireless-security.pmf 2)
+    fi
+    args+=(802-11-wireless-security.psk "$pass")
+  fi
+  if (( isolation )); then
+    args+=(802-11-wireless.ap-isolation yes)
+  else
+    args+=(802-11-wireless.ap-isolation no)
+  fi
+  args+=(ipv4.method shared ipv6.method ignore)
+  if [[ -n $gateway ]]; then
+    args+=(ipv4.addresses "$gateway")
+  fi
+  run nmcli "${args[@]}"
+}
+
+# 已保存的热点配置是否达到加固基线（SAE 或过渡模式 + PMF + 仅 CCMP + 关闭 WPS + 强密码）
+hotspot_conn_secure() {
+  local km proto pair group pmf wps psk
+  km=$(nmcli -g 802-11-wireless-security.key-mgmt connection show "$HOTSPOT_CONN" 2>/dev/null || true)
+  [[ $km == sae || $km == wpa-psk ]] || return 1
+  proto=$(nmcli -g 802-11-wireless-security.proto connection show "$HOTSPOT_CONN" 2>/dev/null || true)
+  [[ $proto == *rsn* ]] || return 1
+  pair=$(nmcli -g 802-11-wireless-security.pairwise connection show "$HOTSPOT_CONN" 2>/dev/null || true)
+  [[ $pair == *ccmp* && $pair != *tkip* ]] || return 1
+  group=$(nmcli -g 802-11-wireless-security.group connection show "$HOTSPOT_CONN" 2>/dev/null || true)
+  [[ $group == *ccmp* && $group != *tkip* ]] || return 1
+  pmf=$(nmcli -g 802-11-wireless-security.pmf connection show "$HOTSPOT_CONN" 2>/dev/null || true)
+  [[ $pmf == 2 || $pmf == 3 ]] || return 1
+  wps=$(nmcli -g 802-11-wireless-security.wps-method connection show "$HOTSPOT_CONN" 2>/dev/null || true)
+  [[ $wps == 1 || $wps == 0x1 ]] || return 1
+  psk=$(nmcli -s -g 802-11-wireless-security.psk connection show "$HOTSPOT_CONN" 2>/dev/null || true)
+  [[ -n $psk ]] || return 1
+  ! hotspot_pass_weak "$psk"
+}
+
+# 读取已有连接的参数到调用方变量（已显式指定的值不覆盖）
+hotspot_reuse_existing() {
+  local v
+  [[ -n $wifi ]] || wifi=$(nmcli -g connection.interface-name connection show "$HOTSPOT_CONN" 2>/dev/null || true)
+  [[ -n $ssid ]] || ssid=$(nmcli -g 802-11-wireless.ssid connection show "$HOTSPOT_CONN" 2>/dev/null || true)
+  if (( ! band_set )); then
+    v=$(nmcli -g 802-11-wireless.band connection show "$HOTSPOT_CONN" 2>/dev/null || true)
+    if [[ -n $v && $v != -- ]]; then band=$v; fi
+  fi
+  if [[ -z $channel ]]; then
+    v=$(nmcli -g 802-11-wireless.channel connection show "$HOTSPOT_CONN" 2>/dev/null || true)
+    if [[ $v != 0 && $v != -- ]]; then channel=$v; fi
+  fi
+  if [[ -z $gateway ]]; then
+    v=$(nmcli -g ipv4.addresses connection show "$HOTSPOT_CONN" 2>/dev/null || true)
+    if [[ $v != -- ]]; then gateway=$v; fi
+  fi
+  if (( ! autostart )); then
+    v=$(nmcli -g connection.autoconnect connection show "$HOTSPOT_CONN" 2>/dev/null || true)
+    if [[ $v == yes ]]; then autostart=1; fi
+  fi
+  if (( ! ap_isolation_set )); then
+    v=$(nmcli -g 802-11-wireless.ap-isolation connection show "$HOTSPOT_CONN" 2>/dev/null || true)
+    if [[ $v == yes ]]; then ap_isolation=1; fi
+  fi
+}
+
 hotspot_start() {
   local wifi='' ssid='' pass='' band='bg' channel='' gateway='' open=0 autostart=0 band_set=0
+  local compat=0 ap_isolation=0 ap_isolation_set=0 pass_given=0 new_pass=0
   while (( $# )); do
     case $1 in
       --wifi)
@@ -358,6 +551,7 @@ hotspot_start() {
       --pass | --password)
         if [[ -z ${2:-} ]]; then die "--pass 需要密码"; fi
         pass=$2
+        pass_given=1
         shift
         ;;
       --band)
@@ -378,6 +572,10 @@ hotspot_start() {
         ;;
       --open) open=1 ;;
       --autostart) autostart=1 ;;
+      --ap-isolation | --isolate) ap_isolation=1; ap_isolation_set=1 ;;
+      --no-ap-isolation) ap_isolation=0; ap_isolation_set=1 ;;
+      --new-pass | --regen-pass) new_pass=1 ;;
+      --compat | --wpa2-transition) compat=1 ;;
       -h | --help)
         hotspot_usage
         return 0
@@ -394,17 +592,25 @@ hotspot_start() {
 
   local has_opts=0
   if [[ -n $wifi$ssid$pass$channel$gateway ]]; then has_opts=1; fi
-  if (( open || autostart || band_set )); then has_opts=1; fi
+  if (( open || autostart || band_set || compat || ap_isolation || new_pass )); then has_opts=1; fi
 
-  # 无参数且已有配置：直接复用
+  # 无参数且已有配置：安全基线达标才直接复用，否则按加固默认值重建
   if (( ! has_opts )) && hotspot_conn_exists; then
-    if ! run nmcli connection up "$HOTSPOT_CONN"; then
-      warn "启动失败，可用 sudo usbnic hotspot start --ssid 新名称 --pass 新密码 重建"
-      return 1
+    if hotspot_conn_secure; then
+      if ! run nmcli connection up "$HOTSPOT_CONN"; then
+        warn "启动失败，可用 sudo usbnic hotspot start --ssid 新名称 重建"
+        return 1
+      fi
+      ok "热点已启动（复用已保存配置）"
+      hotspot_status
+      return 0
     fi
-    ok "热点已启动（复用已保存配置）"
-    hotspot_status
-    return 0
+    warn "已保存的热点配置未达到安全基线，将按 WPA3-SAE 默认值重建"
+    hotspot_reuse_existing
+  fi
+
+  if (( new_pass )) && hotspot_conn_exists; then
+    hotspot_reuse_existing
   fi
 
   if [[ -z $wifi ]]; then
@@ -448,16 +654,30 @@ hotspot_start() {
     fi
   fi
 
-  # 密码与 SSID
+  # 密码与 SSID：优先复用已保存的强密码，避免每次重建都换密码
   if (( open )) && [[ -n $pass ]]; then
     die "--open 与 --pass 不能同时使用"
   fi
+  if (( new_pass )) && (( pass_given )); then
+    die "--new-pass 与 --pass 不能同时使用；轮换密码请只加 --new-pass"
+  fi
+  local pass_source=''
   if (( ! open )); then
-    if [[ -z $pass ]]; then
+    if (( new_pass )); then
       pass=$(gen_pass)
+      pass_source='generated'
+    elif [[ -z $pass ]]; then
+      if pass=$(hotspot_pass_load); then
+        pass_source='saved'
+      else
+        pass=$(gen_pass)
+        pass_source='generated'
+      fi
+    else
+      pass_source='user'
     fi
-    if (( ${#pass} < 8 || ${#pass} > 63 )); then
-      die "WPA2 密码长度需为 8-63 位"
+    if hotspot_pass_weak "$pass"; then
+      die "密码太弱：至少 ${HOTSPOT_PASS_MIN} 位，且需包含大写/小写/数字/符号中至少三类；建议省略 --pass 自动生成强密码"
     fi
   fi
   if [[ -z $ssid ]]; then
@@ -514,36 +734,44 @@ hotspot_start() {
   run nmcli device set "$wifi" managed yes || warn "设置 managed 失败"
   run nmcli radio wifi on || true
 
-  if hotspot_conn_exists; then
-    run nmcli connection down "$HOTSPOT_CONN" || true
-    run nmcli connection delete "$HOTSPOT_CONN" || warn "删除旧配置失败"
-  fi
+  local use_sae=1
+  if (( compat )); then use_sae=0; fi
+  local sec_label='WPA3-SAE (pmf=required)'
+  if (( ! use_sae )); then sec_label='WPA2/WPA3 过渡 (wpa-psk, pmf=optional)'; fi
+  if (( open )); then sec_label='开放网络（无加密）'; fi
+  info "安全配置: $sec_label, proto=rsn, pairwise/group=ccmp, WPS=disabled, AP隔离=$([[ $ap_isolation == 1 ]] && printf 开启 || printf 关闭)"
 
-  local -a args=(connection add type wifi ifname "$wifi" con-name "$HOTSPOT_CONN"
-    ssid "$ssid" 802-11-wireless.mode ap 802-11-wireless.band "$band")
-  if (( autostart )); then
-    args+=(connection.autoconnect yes)
-  else
-    args+=(connection.autoconnect no)
-  fi
-  if [[ -n $channel ]]; then
-    args+=(802-11-wireless.channel "$channel")
-  fi
-  if (( ! open )); then
-    args+=(802-11-wireless-security.key-mgmt wpa-psk 802-11-wireless-security.psk "$pass")
-  fi
-  args+=(ipv4.method shared ipv6.method ignore)
-  if [[ -n $gateway ]]; then
-    args+=(ipv4.addresses "$gateway")
-  fi
-
-  if ! run nmcli "${args[@]}"; then
+  if ! hotspot_build_conn "$wifi" "$ssid" "$band" "$channel" "$gateway" "$autostart" "$pass" "$use_sae" "$ap_isolation"; then
     warn "创建热点配置失败"
     return 1
   fi
   if ! run nmcli connection up "$HOTSPOT_CONN"; then
-    warn "热点启动失败。可尝试: 升级 wpa_supplicant/NetworkManager，或换 --wifi 指定另一块无线网卡"
-    return 1
+    if (( use_sae && ! open )); then
+      warn "WPA3-SAE(pmf=required) 协商失败，回退 WPA2/WPA3 过渡模式 (pmf=optional)"
+      run nmcli connection delete "$HOTSPOT_CONN" || true
+      use_sae=0
+      if hotspot_build_conn "$wifi" "$ssid" "$band" "$channel" "$gateway" "$autostart" "$pass" 0 "$ap_isolation" \
+        && run nmcli connection up "$HOTSPOT_CONN"; then
+        warn "已回退为 WPA2/WPA3 过渡模式；如需仅 WPA3，请换用支持 SAE 的网卡/驱动"
+      else
+        warn "热点启动失败。可尝试: 升级 wpa_supplicant/NetworkManager，或换 --wifi 指定另一块无线网卡"
+        return 1
+      fi
+    else
+      warn "热点启动失败。可尝试: 升级 wpa_supplicant/NetworkManager，或换 --wifi 指定另一块无线网卡"
+      return 1
+    fi
+  fi
+
+  if (( ! open )); then
+    if hotspot_pass_save "$pass"; then
+      info "热点密码已保存到 $HOTSPOT_PASS_FILE（600，仅 root 可读）"
+      if [[ $pass_source == saved ]]; then
+        info "复用已保存的密码；忘记可用: usbnic hotspot pass"
+      fi
+    else
+      warn "密码保存到 $HOTSPOT_PASS_FILE 失败；请用 usbnic hotspot status 查看本次密码"
+    fi
   fi
 
   printf '\n'
@@ -552,6 +780,7 @@ hotspot_start() {
   gw=$(nmcli -g IP4.ADDRESS device show "$wifi" 2>/dev/null || true)
   kv "SSID" "$ssid"
   kv "密码" "$( (( open )) && printf '（开放网络）' || printf '%s' "$pass" )"
+  kv "加密" "$sec_label"
   kv "网卡/频段" "$wifi / $(band_label "$band")${channel:+/$channel}"
   kv "客户端网关" "${gw:-${gateway:-10.42.0.1/24}}"
   kv "上行网卡" "${uplink:-无}"
@@ -566,6 +795,7 @@ cmd_hotspot() {
     start) hotspot_start "$@" ;;
     stop) hotspot_stop ;;
     status | show) hotspot_status ;;
+    pass | password) hotspot_pass_cmd ;;
     clients | stations) hotspot_clients "$@" ;;
     -h | --help) hotspot_usage ;;
     *)
