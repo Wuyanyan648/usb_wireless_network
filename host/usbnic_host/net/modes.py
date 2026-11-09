@@ -168,3 +168,35 @@ def apply_mode(
 
     ok = all(step["ok"] for step in steps)
     return {"ok": ok, "mode": mode, "steps": steps, "proxy": proxy_result}
+
+
+def reinforce_mode(
+    config: Config, mode: str, proxy: bool | None = None
+) -> dict[str, Any]:
+    """连接已处于目标模式时使用：只补守护进程侧状态，不重启 NM 连接。
+
+    NetworkManager 的连接会自己保持（`ipv4.method shared` 等），守护进程重启后
+    真正缺的只有 sysctl 转发和代理开关。这里避免 `nmcli down/up` 把正在服务的
+    网关短暂掐断。
+    """
+    steps: list[dict[str, Any]] = []
+    if mode == "gateway":
+        steps.append(_enable_forward(config))
+    proxy_enable = MODE_PROXY[mode] if proxy is None else proxy
+    proxy_result = set_proxy(config, proxy_enable, mode)
+    proxy_ok = bool(proxy_result.get("ok"))
+    steps.append(
+        _step(
+            "proxy",
+            proxy_ok or proxy is False,
+            ""
+            if proxy_ok
+            else ("Clash 未运行，跳过关闭代理" if proxy is False else str(proxy_result.get("error") or "代理切换失败")),
+        )
+    )
+    return {
+        "ok": all(step["ok"] for step in steps),
+        "mode": mode,
+        "steps": steps,
+        "proxy": proxy_result,
+    }

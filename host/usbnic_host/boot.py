@@ -6,6 +6,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from . import state
 from .config import Config
 from .net.interfaces import get_default_routes
 from .net.modes import apply_mode
@@ -92,6 +93,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     config = Config.load(args.config)
+
+    # 用户上次在门户里主动选过别的模式时，开机不抢回 gateway，交给 usbnicd 启动重放
+    saved = state.load(config.data_dir)
+    if saved and saved["mode"] != "gateway":
+        print(f"上次选择的模式是 {saved['mode']}，跳过开机自动网关（由 usbnicd 重放）")
+        return 0
+
     deadline = time.monotonic() + max(0.0, args.wait)
     reasons: list[str] = []
     matched = False

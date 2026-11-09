@@ -4,16 +4,80 @@ import argparse
 import logging
 import os
 import sys
+import threading
+import time
 from pathlib import Path
 
 import uvicorn
 
-from . import __version__
+from . import __version__, state
 from .api import create_app
+from .boot import detect_home_gateway
 from .config import Config
 from .monitor.collector import Monitor
+from .net.modes import apply_mode, reinforce_mode
 
 DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "config" / "host.yaml"
+
+
+def replay_last_mode(
+    config: Config, logger: logging.Logger, monitor: Monitor | None = None
+) -> None:
+    """把用户上次成功应用的网络模式重放一次（stop → start 后不用人工点）。
+
+    只重放**落盘的选择**，没有记录或记录是 `client`（默认态）时不动网络。
+    代理开关只有被用户手动拨过才恢复，否则按开机约定保持关闭。
+
+    如果 NetworkManager 里连接已经处于目标模式（重启守护进程时很常见），只补齐
+    sysctl 转发与代理，不做 `nmcli down/up`，避免把正在上网的网关短暂掐断。
+    """
+    saved = state.load(config.data_dir)
+    if not saved:
+        logger.info("没有上次模式记录，保持默认 client")
+        return
+    if saved["mode"] == "client":
+        logger.info("上次模式是 client（默认态），启动不重放")
+        return
+
+    time.sleep(3.0)  # 等 NetworkManager / 网卡就绪
+    proxy = saved["proxy"] if saved.get("proxy_explicit") else False
+    current = ""
+    if monitor is not None:
+        try:
+            current = str(monitor.snapshot().get("mode") or "")
+        except Exception:  # noqa: BLE001 - 取不到就当未知，走完整重放
+            current = ""
+    if current == saved["mode"]:
+        result = reinforce_mode(config, saved["mode"], proxy)
+        how = "连接已是该模式，只补转发/代理"
+    else:
+        if saved["mode"] == "gateway":
+            # 不在家（下游没载波 / 上行不是有线 / 默认网关不对）时不强行拉起网关
+            matched, reasons = detect_home_gateway(config)
+            if not matched:
+                logger.info(
+                    "上次模式是 gateway，但当前硬件不满足家庭网关拓扑（%s），本次不重放",
+                    "；".join(reasons),
+                )
+                return
+        result = apply_mode(config, saved["mode"], proxy=proxy)
+        how = "重新应用模式"
+    failed = [s for s in result.get("steps", []) if not s.get("ok")]
+    if result.get("ok"):
+        logger.info(
+            "已重放上次模式 %s（代理%s，记录于 %s；%s）",
+            saved["mode"],
+            "开" if proxy else "关",
+            saved.get("saved_at") or "未知",
+            how,
+        )
+    else:
+        logger.warning(
+            "重放上次模式 %s 有 %d 步失败: %s",
+            saved["mode"],
+            len(failed),
+            "；".join("%s: %s" % (s.get("name"), s.get("detail") or "") for s in failed),
+        )
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -67,6 +131,14 @@ def main(argv: list[str] | None = None) -> int:
     logger.info("usbnic 上位机 %s 启动: http://%s:%s", __version__, config.bind, config.port)
     logger.info("支持网络模式切换与透明代理控制")
     logger.info("数据目录: %s", config.data_dir)
+
+    # 后台重放上次模式：不阻塞 HTTP 服务起来，也不在没记录时碰网络
+    threading.Thread(
+        target=replay_last_mode,
+        args=(config, logger, monitor),
+        name="mode-replay",
+        daemon=True,
+    ).start()
 
     try:
         uvicorn.run(

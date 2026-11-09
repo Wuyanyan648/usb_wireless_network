@@ -19,7 +19,8 @@ from .monitor.clash_proxies import (
 from .monitor.collector import Monitor
 from .monitor.hotspot import hotspot_info
 from .monitor.proxy import set_proxy
-from .net.modes import MODES, apply_mode
+from .net.modes import MODES, MODE_PROXY, apply_mode
+from . import state
 
 WEB_DIR = Path(__file__).parent / "web"
 
@@ -123,6 +124,11 @@ def create_app(monitor: Monitor, config: Config) -> FastAPI:
     def proxy_toggle(body: ProxyToggleRequest) -> dict:
         mode = monitor.snapshot().get("mode", "client")
         result = set_proxy(config, body.enable, mode)
+        # 代理是单独的手动选择，同步进上次模式记录，重启重放时不会被改回去
+        if result["ok"]:
+            saved = state.load(config.data_dir)
+            if saved:
+                state.save(config.data_dir, saved["mode"], body.enable, explicit=True)
         # 等采集器完成下一次采样，避免前端拿到切换前的旧状态
         time.sleep(2.2)
         snapshot = monitor.snapshot()
@@ -162,6 +168,10 @@ def create_app(monitor: Monitor, config: Config) -> FastAPI:
                 content={"ok": False, "error": f"未知模式: {body.mode}"},
             )
         result = apply_mode(config, body.mode, body.proxy)
+        if result["ok"]:
+            # 只有成功的选择才落盘，供守护进程重启后重放
+            wanted = MODE_PROXY[body.mode] if body.proxy is None else bool(body.proxy)
+            state.save(config.data_dir, body.mode, wanted, explicit=body.proxy is not None)
         time.sleep(2.5)
         snapshot = monitor.snapshot()
         return {

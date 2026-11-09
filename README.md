@@ -341,6 +341,20 @@ scripts/install-host-boot.sh --uninstall  # 移除开机自启
 
 切换时会同步 `connection.autoconnect`，避免离开家后网关或热点被自动拉起。
 
+### 重启后重放上次模式
+
+在页面里切换模式成功后，选择会原子写入 `host/data/last_mode.json`（`{"mode","proxy","proxy_explicit","saved_at"}`）。`usbnicd` 启动后 3 秒在后台线程读它并重放，所以 stop → start（页面按钮 / `systemctl restart` / 崩溃自动重启）之后不需要再人工点一次。
+
+规则：
+
+- **没有记录**（首次安装）或记录是 `client`（默认态）：不动网络，只写日志。
+- 记录是 `gateway` / `hotspot`：先看 NetworkManager 当前连接。**已经处于该模式**时只补守护进程侧状态（`ip_forward`、代理），不执行 `nmcli down/up`，避免把正在上网的网关短暂掐断；**不一致**时才完整应用一次。
+- 记录的 `gateway` 但当前硬件不满足家庭网关拓扑（下游没载波 / 没有有线载波的上行 / 默认网关不是 `home_gateway`）：跳过重放，不强行拉起。
+- 代理只有被用户**手动拨过**（`proxy_explicit=true`）才在重启后恢复；按模式默认值带出来的代理一律按开机约定保持关闭，不会因为重放把你手动关掉的代理打开。
+- `usbnic-boot.service`（开机检测）在记录里是 `gateway` 以外的模式时直接跳过并交给 `usbnicd` 重放，避免开机把用户的选择覆盖回家庭网关。
+
+支持在页面之外查看/重置：直接编辑或删除 `host/data/last_mode.json`（删除后下次启动当作首次安装处理）。
+
 ### 透明代理
 
 代理开关在「代理状态」卡片，对应接口 `POST /api/proxy/toggle`。
