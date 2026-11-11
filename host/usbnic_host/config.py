@@ -104,7 +104,7 @@ class Config:
     # 装表后的观察窗口（秒）：窗口内命中不增长且下游有流量就自动撤表；0 表示不校验
     tproxy_verify_seconds: float = 5.0
     # 设备级代理策略：全局默认（direct 保持现有行为），可按 MAC 单独覆盖
-    tproxy_default_policy: str = "direct"
+    tproxy_default_policy: str = "proxy"
     # host.yaml 里的初始策略；运行期以 data_dir 下的 JSON 文件为准
     device_policies: dict[str, str] = field(default_factory=dict)
     device_policies_file: str = "device_policies.json"
@@ -247,7 +247,7 @@ class Config:
                 if str(item).strip()
             ],
             tproxy_verify_seconds=float(raw.get("tproxy_verify_seconds", 5.0)),
-            tproxy_default_policy=_policy(raw.get("tproxy_default_policy", "direct")),
+            tproxy_default_policy=_policy(raw.get("tproxy_default_policy", "proxy")),
             device_policies={
                 mac: _policy(policy)
                 for mac, policy in (

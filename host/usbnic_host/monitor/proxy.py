@@ -13,6 +13,7 @@ from ..exec import run
 from ..util import read_text
 from .clash import ensure_clash
 from . import device_policy, rule_provider
+from .. import state
 
 # nftables 表名与 TPROXY 策略路由表号，统一前缀便于精确清理
 NFT_TABLE = "usbnic"
@@ -830,6 +831,29 @@ def enable_tproxy(
     }
 
 
+_AUTO_INSTALL_INTERVAL = 30.0
+_last_auto_install = 0.0
+
+
+def _auto_install(config: Config) -> dict[str, Any]:
+    """总开关开着时补装 TPROXY：新设备上线、表被意外删掉都能自动恢复。
+
+    30 秒内只尝试一次，避免装表失败时每个采样周期都重试。
+    """
+    global _last_auto_install
+    now = time.monotonic()
+    if now - _last_auto_install < _AUTO_INSTALL_INTERVAL:
+        return {"ok": False, "skipped": True, "detail": "刚刚尝试过装表"}
+    _last_auto_install = now
+    saved = state.load(config.data_dir) or {}
+    if not saved.get("proxy"):
+        return {"ok": False, "skipped": True, "detail": "总开关未开启"}
+    mode = str(saved.get("mode") or "")
+    if mode in ("gateway", "router", "hotspot"):
+        return enable_tproxy(config, mode=mode)
+    return set_tun(config, True)
+
+
 def refresh_proxy_set(config: Config) -> dict[str, Any]:
     """按 ARP / DHCP 租约刷新 nft 集合（DHCP 换 IP 后仍能命中正确设备）。
 
@@ -837,7 +861,21 @@ def refresh_proxy_set(config: Config) -> dict[str, Any]:
     "命中但不投递"的空转规则。
     """
     if not tproxy_installed():
-        return {"ok": True, "updated": False, "proxy": 0, "direct": 0}
+        proxy_ips, direct_ips = device_policy.assignments(config)
+        result: dict[str, Any] = {
+            "ok": True,
+            "updated": False,
+            "proxy": len(proxy_ips),
+            "direct": len(direct_ips),
+        }
+        # 总开关开着、但有设备（尤其新上线的）需要走代理时，把表补上，
+        # 否则新设备要等用户手动点一下才会生效。
+        if proxy_ips:
+            install = _auto_install(config)
+            if install.get("ok"):
+                result["install"] = "auto"
+                result["updated"] = True
+        return result
     proxy_ips, direct_ips = device_policy.assignments(config)
     if not proxy_ips:
         cleanup_tproxy(config, clear_port=True)

@@ -1006,10 +1006,12 @@ function deviceRow(item) {
   const isHostRow = item.is_local && /USB 网口/.test(item.name || "");
   if (isHostRow) {
     policyCell.appendChild(renderHostSwitch());
-  } else if (item.mac) {
+  } else if (item.mac && policyFor(item.mac)) {
+    // 只有下游网段里可管控的设备才有开关；上游光猫等不参与默认代理
     policyCell.appendChild(renderPolicySwitch(item.mac));
   } else {
     policyCell.textContent = "—";
+    if (item.mac) policyCell.title = "不在下游网段，不参与代理策略";
   }
   row.appendChild(policyCell);
 
@@ -1044,23 +1046,7 @@ function deviceRow(item) {
 
 function policyFor(mac) {
   const data = state.devicePolicies || {};
-  const found = (data.items || []).find((row) => row.mac === mac);
-  if (found) return found;
-  return {
-    policy: data.default || "direct",
-    effective: "direct",
-    active: Boolean(data.active),
-  };
-}
-
-function renderPolicyCell(item) {
-  const cell = el("td", "policy-cell");
-  if (!item.mac) {
-    cell.textContent = "—";
-    return cell;
-  }
-  cell.appendChild(renderPolicySwitch(item.mac));
-  return cell;
+  return (data.items || []).find((row) => row.mac === mac) || null;
 }
 
 function totalProxyOn() {
@@ -1073,7 +1059,7 @@ function totalProxyOn() {
 function renderPolicySwitch(mac) {
   const info = policyFor(mac);
   const total = totalProxyOn();
-  const on = total && info.policy === "proxy";
+  const on = total && Boolean(info && info.policy === "proxy");
   const button = el("button", `policy-switch ${on ? "on" : "off"}`);
   button.type = "button";
   button.setAttribute("role", "switch");
@@ -1136,7 +1122,7 @@ async function setHostProxy(enable) {
 function renderPolicyDefault() {
   const box = $("policyDefault");
   if (!box) return;
-  const current = (state.devicePolicies || {}).default || "direct";
+  const current = (state.devicePolicies || {}).default || "proxy";
   box.querySelectorAll("button").forEach((button) => {
     button.classList.toggle("active", button.dataset.policy === current);
     button.disabled = state.policyBusy || !totalProxyOn();
@@ -1178,7 +1164,9 @@ async function setDefaultPolicy(policy) {
       body: JSON.stringify({ policy }),
     });
     const data = await response.json();
-    if (!data.ok) throw new Error(data.error || "设置失败");
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || data.install?.detail || "设置失败");
+    }
     state.devicePolicies = data;
   } catch (error) {
     alert(`默认代理策略设置失败: ${error.message}`);

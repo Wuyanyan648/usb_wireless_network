@@ -374,9 +374,28 @@ def create_app(monitor: Monitor, config: Config) -> FastAPI:
 
     @app.put("/api/devices/policy/default")
     def devices_policy_default(body: DefaultPolicyRequest) -> dict:
+        previous = device_policy.default_policy(config)
         result = device_policy.set_default(config, body.policy)
         if not result["ok"]:
             return JSONResponse(status_code=400, content=result)
+        # 默认代理意味着"所有未显式直连的设备都要走代理"，立刻装表并刷新集合；
+        # 总开关关着时只存策略，等总开关打开再生效。
+        saved = state.load(config.data_dir) or {}
+        if body.policy == "proxy" and saved.get("proxy"):
+            install = _install_tproxy_if_needed(config, monitor)
+            result["install"] = install
+            if not install.get("ok"):
+                device_policy.set_default(config, previous)
+                refresh_proxy_set(config)
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        **device_policy.table(config),
+                        "ok": False,
+                        "error": _install_error(install),
+                        "install": install,
+                    },
+                )
         result["refresh"] = refresh_proxy_set(config)
         result.update(device_policy.table(config))
         return result

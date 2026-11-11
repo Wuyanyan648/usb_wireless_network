@@ -432,9 +432,9 @@ TPROXY 只匹配配置中的下游接口与网段，LAN 互访和上游光猫网
 | --- | --- |
 | 设备策略列表（含当前生效状态） | `GET /api/devices/policies` |
 | 设置单台设备 | `PUT /api/devices/policy`，body `{"mac": "aa:bb:cc:dd:ee:ff", "policy": "proxy"}` |
-| 设置全局默认 | `PUT /api/devices/policy/default`，body `{"policy": "direct"}` |
+| 设置全局默认 | `PUT /api/devices/policy/default`，body `{"policy": "proxy"}` |
 
-- 策略只有 `proxy` / `direct` 两种，全局默认是 `direct`（不改变现有行为）。页面上的修改写入 `data_dir/device_policies.json`，优先于 `host.yaml` 的初始值。
+- 策略只有 `proxy` / `direct` 两种，全局默认是 `proxy`：**总开关一打开，所有下游设备默认走代理**，只有用户显式点成 `direct` 的设备才直连（显式项持久保存，切换默认值不会覆盖它们）。页面上的修改写入 `data_dir/device_policies.json`，优先于 `host.yaml` 的初始值。
 - 底层是 nft 集合：`proxy_nets` 放"走代理"设备的当前 IP，`direct_nets` 放显式直连的 IP。规则顺序固定为 `直连集合 → 白名单 → tproxy`，直连设备永不被劫持。
 - ARP / DHCP 租约变化时，吞吐采样线程每 10 秒刷新一次集合，DHCP 换 IP 不会把策略带错。
 - 没有任何设备选择走代理时**不装表**，只开 TUN，下游保持普通 NAT。
@@ -551,10 +551,9 @@ tproxy_verify_seconds: 5
 # mihomo rule-provider 目录：usbnicd 维护 usbnic-proxy.yaml，留空表示不启用
 clash_ruleset_dir: /path/to/clash-verge/ruleset
 
-# 设备级代理策略：默认直连；运行期设置写入 data_dir/device_policies.json
-tproxy_default_policy: direct
-device_policies:                     # 首次生成的初始值（MAC -> proxy/direct）
-  "40:44:f7:d8:99:c5": direct        # Switch 2：代理会掉 NAT 类型，默认直连
+# 设备级代理策略：默认全代理（显式 direct 的设备才直连）；运行期设置写入 data_dir/device_policies.json
+tproxy_default_policy: proxy
+device_policies: {}                  # 首次生成的初始值（MAC -> proxy/direct），留空即全部跟随默认
 device_policies_file: device_policies.json
 
 # 使用时长 / 系统健康（并入 usbnicd）

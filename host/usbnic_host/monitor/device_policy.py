@@ -1,9 +1,9 @@
 """设备级代理策略：MAC 是设备身份，IP 只是 ARP / DHCP 租约给出的瞬时映射。
 
 策略只有 `proxy`（下游流量交给 TPROXY）和 `direct`（普通 NAT）两种，另有
-一个全局默认（默认 `direct`，不改变未登记设备的行为）。运行期设置写入
-`data_dir/device_policies.json`；host.yaml 里的 `device_policies` 只作为
-文件缺失时的初始值。
+一个全局默认（默认 `proxy`：总开关打开后所有下游设备默认走代理，用户显式
+点成 direct 的设备才直连）。运行期设置写入 `data_dir/device_policies.json`；
+host.yaml 里的 `device_policies` 只作为文件缺失时的初始值。
 
 装表时只把"当前策略为 proxy"的设备的 IP 放进 nft 集合，因此 DHCP 换 IP
 不会把策略带错；集合由吞吐采样线程按 ARP/租约变化周期刷新。
@@ -43,7 +43,7 @@ def load(config: Config) -> dict[str, Any]:
             raw = loaded
     except (OSError, json.JSONDecodeError):
         raw = {}
-    default = _clean(raw.get("default"), _clean(config.tproxy_default_policy, POLICY_DIRECT))
+    default = _clean(raw.get("default"), _clean(config.tproxy_default_policy, POLICY_PROXY))
     devices = dict(config.device_policies)
     for mac, policy in (raw.get("devices") or {}).items():
         key = normalize_mac(str(mac))
@@ -111,6 +111,9 @@ def assignments(
         ip = str(item.get("ip") or "")
         mac = normalize_mac(str(item.get("mac") or ""))
         if not ip or not mac:
+            continue
+        # 本机地址（USB 网口 / TUN / VPN）永远不进下游集合，主机走自己的 TUN 开关
+        if item.get("is_local"):
             continue
         target = proxy_ips if resolve(config, mac, data) == POLICY_PROXY else direct_ips
         target.append(ip)

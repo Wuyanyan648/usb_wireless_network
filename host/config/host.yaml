@@ -101,13 +101,13 @@ tproxy_exclude_ips: []
 tproxy_verify_seconds: 5
 
 # ---------- 设备级代理管控（按 MAC 决定谁走代理、谁直连） ----------
-# 全局默认策略：direct 表示不改变现有行为；proxy 表示没单独设置的设备默认走代理。
-# 运行期在页面上的修改写入 data_dir/device_policies.json，优先于这里。
-tproxy_default_policy: direct
+# 全局默认策略：proxy 表示总开关打开后所有下游设备默认走代理，只有用户显式
+# 设成 direct 的设备才直连。运行期在页面上的修改写入 data_dir/device_policies.json，
+# 优先于这里。
+tproxy_default_policy: proxy
 # 首次生成策略文件时的初始值（MAC -> proxy / direct），之后以页面设置为准。
-# Switch 2 走代理会让 NAT 类型掉到 F，默认固定直连，需要时在页面手动打开。
-device_policies:
-  "40:44:f7:d8:99:c5": direct
+# 留空即"全部跟随默认策略"；需要直连的设备在页面上单独关闭即可。
+device_policies: {}
 # 策略文件相对 data_dir；放本地运行目录，不进仓库
 device_policies_file: device_policies.json
 

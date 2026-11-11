@@ -80,3 +80,34 @@ def test_ruleset_orders_direct_before_tproxy() -> None:
 def test_ruleset_skips_when_no_device_selected() -> None:
     config = Config(gateway_iface="enx-test", clash_tproxy_port=7896)
     assert tproxy_ruleset(config, proxy_nets=[], direct_nets=["10.10.10.110"]) == ""
+
+
+def test_default_is_proxy_without_config(tmp_path: Path) -> None:
+    """总开关一打开就默认全代理：文件缺失时默认值必须是 proxy。"""
+    config = Config(
+        gateway_iface="enx-test", lan_cidr="10.10.10.0/24", data_dir=tmp_path
+    )
+    assert device_policy.load(config)["default"] == "proxy"
+    assert device_policy.resolve(config, "aa:bb:cc:dd:ee:ff") == "proxy"
+
+
+def test_switching_default_keeps_explicit_overrides(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    device_policy.set_device(config, "aa:bb:cc:dd:ee:01", "direct")
+    assert device_policy.set_default(config, "proxy")["ok"]
+    data = device_policy.load(config)
+    assert data["devices"]["aa:bb:cc:dd:ee:01"] == "direct"
+    assert device_policy.resolve(config, "aa:bb:cc:dd:ee:01") == "direct"
+    assert device_policy.resolve(config, "aa:bb:cc:dd:ee:02") == "proxy"
+
+
+def test_assignments_excludes_local_host(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    device_policy.set_default(config, "proxy")
+    items = [
+        {"ip": "10.10.10.1", "mac": "aa:bb:cc:dd:ee:99", "is_local": True},
+        {"ip": "10.10.10.120", "mac": "aa:bb:cc:dd:ee:02"},
+    ]
+    proxy_ips, direct_ips = device_policy.assignments(config, items)
+    assert proxy_ips == ["10.10.10.120"]
+    assert direct_ips == []
