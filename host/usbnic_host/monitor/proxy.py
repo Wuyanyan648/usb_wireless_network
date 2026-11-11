@@ -408,27 +408,36 @@ def _listener_addresses(config: Config) -> dict[str, list[str]]:
     return result
 
 
-def _wait_ipv4_listener(config: Config, timeout: float = 3.0) -> dict[str, Any]:
-    """等 mihomo 重新绑定后确认 tproxy 端口是 IPv4 监听。
+def _probe_ipv4(port: int, timeout: float = 0.6) -> bool:
+    """从本机用 IPv4 连一下端口，确认双栈 `*:7896` 对 v4 是可达的。"""
+    import socket
 
-    `bind-address: 0.0.0.0` 会把监听从双栈 `*:7896` 改成 `0.0.0.0:7896`；
-    如果仍是 `*` / `[::]`，说明当前内核不接受这个配置，继续装表只会复现
-    "规则命中但套接字接不住"的黑洞，因此宁可失败也不装表。
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _wait_ipv4_listener(config: Config, timeout: float = 3.0) -> dict[str, Any]:
+    """确认 tproxy 端口在监听，且 IPv4 连接能够落到这个监听上。
+
+    `*:7896` 是双栈监听（IPV6_V6ONLY=0），IPv4 本来就能进入，不应因为
+    没有显式绑 `0.0.0.0` 就拒绝装表；最终是否真正接管由 verify_tproxy
+    的实测投递决定。
     """
     deadline = time.monotonic() + timeout
     addresses = _listener_addresses(config)
     while time.monotonic() < deadline:
-        tcp = addresses["tcp"]
-        if tcp and any(item.startswith(f"{TPROXY_BIND_ADDRESS}:") for item in tcp):
-            return {"ok": True, "error": "", "tcp": tcp, "udp": addresses["udp"]}
+        if addresses["tcp"] and _probe_ipv4(int(config.clash_tproxy_port)):
+            return {"ok": True, "error": "", "tcp": addresses["tcp"], "udp": addresses["udp"]}
         time.sleep(0.25)
         addresses = _listener_addresses(config)
     return {
         "ok": False,
         "error": (
-            "7896 未绑定到 0.0.0.0（当前："
-            f"{', '.join(addresses['tcp']) or '未监听'}）；"
-            "需要 mihomo 支持 bind-address，升级前不要装表"
+            "7896 未监听或 IPv4 无法连接（当前："
+            f"{', '.join(addresses['tcp']) or '未监听'}）"
         ),
         "tcp": addresses["tcp"],
         "udp": addresses["udp"],
