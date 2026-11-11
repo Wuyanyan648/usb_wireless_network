@@ -269,8 +269,11 @@ class ThroughputMonitor:
                     item["name"] = "设备（随机 MAC）"
                     item["mac_random"] = True
                     item["name_note"] = "MAC 未在 IEEE 注册，且没有可用的主机名"
-            if not (self.config.hide_local_addresses and item.get("is_local")):
-                kept.append(item)
+            if self.config.hide_local_addresses and item.get("is_local"):
+                # USB 网口本机行是主机代理开关入口，豁免隐藏
+                if not str(item.get("name") or "").startswith("本机（USB 网口"):
+                    continue
+            kept.append(item)
         items = kept
         items.sort(key=lambda item: (item.get("rx_rate", 0) + item.get("tx_rate", 0)), reverse=True)
         for item in items:

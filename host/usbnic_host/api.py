@@ -21,7 +21,9 @@ from .monitor.hotspot import hotspot_info
 from .monitor.proxy import (
     clash_get,
     enable_tproxy,
+    host_proxy_pref,
     refresh_proxy_set,
+    set_host_proxy,
     set_proxy,
     tproxy_installed,
 )
@@ -36,6 +38,10 @@ WEB_DIR = Path(__file__).parent / "web"
 
 
 class ProxyToggleRequest(BaseModel):
+    enable: bool
+
+
+class HostProxyRequest(BaseModel):
     enable: bool
 
 
@@ -234,6 +240,24 @@ def create_app(monitor: Monitor, config: Config) -> FastAPI:
             "proxy": snapshot.get("proxy", {}),
         }
 
+    @app.put("/api/proxy/host")
+    def proxy_host(body: HostProxyRequest) -> dict:
+        """主机代理开关：只切 tun.enable，不碰 TPROXY 表与设备策略。"""
+        proxy_state = monitor.snapshot().get("proxy", {})
+        if not (proxy_state.get("tun") or proxy_state.get("tproxy")):
+            return JSONResponse(
+                status_code=409,
+                content={"ok": False, "error": "总代理未开启，主机开关不生效"},
+            )
+        result = set_host_proxy(config, body.enable)
+        time.sleep(1.2)
+        return {
+            "ok": result["ok"],
+            "error": result["error"],
+            "host_proxy": bool(body.enable) if result["ok"] else host_proxy_pref(config),
+            "proxy": monitor.snapshot().get("proxy", {}),
+        }
+
     @app.get("/api/proxies")
     def proxies() -> dict:
         return proxy_overview(config)
@@ -293,7 +317,12 @@ def create_app(monitor: Monitor, config: Config) -> FastAPI:
     @app.get("/api/devices/policies")
     def devices_policies() -> dict:
         """设备级策略：谁走代理、谁直连，以及当前是否已生效。"""
-        return device_policy.table(config)
+        data = device_policy.table(config)
+        proxy_state = monitor.snapshot().get("proxy", {})
+        saved = state.load(config.data_dir) or {}
+        # 总开关是否开启以持久记录为准：主机 TUN 关掉、暂无设备走代理时仍是开启态
+        data["total"] = bool(saved.get("proxy") or proxy_state.get("tproxy"))
+        return data
 
     @app.put("/api/devices/policy")
     def devices_policy(body: DevicePolicyRequest) -> dict:

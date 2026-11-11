@@ -977,7 +977,10 @@ function deviceRow(item) {
   row.appendChild(nameCell);
 
   const policyCell = el("td", "policy-cell");
-  if (item.mac) {
+  const isHostRow = item.is_local && /USB 网口/.test(item.name || "");
+  if (isHostRow) {
+    policyCell.appendChild(renderHostSwitch());
+  } else if (item.mac) {
     policyCell.appendChild(renderPolicySwitch(item.mac));
   } else {
     policyCell.textContent = "—";
@@ -995,10 +998,12 @@ function deviceRow(item) {
   }
   row.appendChild(idCell);
 
-  const rateCell = el("td", "num");
-  rateCell.appendChild(el("div", "", item.rx_rate_mbps != null ? `↓ ${fmtMbps(item.rx_rate_mbps)}` : "—"));
-  rateCell.appendChild(el("div", "cell-sub", item.tx_rate_mbps != null ? `↑ ${fmtMbps(item.tx_rate_mbps)}` : "—"));
-  row.appendChild(rateCell);
+  row.appendChild(
+    el("td", "num", item.rx_rate_mbps != null ? `↓ ${fmtMbps(item.rx_rate_mbps)}` : "—")
+  );
+  row.appendChild(
+    el("td", "num", item.tx_rate_mbps != null ? `↑ ${fmtMbps(item.tx_rate_mbps)}` : "—")
+  );
   row.appendChild(
     el(
       "td",
@@ -1032,21 +1037,74 @@ function renderPolicyCell(item) {
   return cell;
 }
 
+function totalProxyOn() {
+  const data = state.devicePolicies || {};
+  if (data.total !== undefined) return Boolean(data.total);
+  const proxy = (state.status || {}).proxy || {};
+  return Boolean(proxy.tun || proxy.tproxy);
+}
+
 function renderPolicySwitch(mac) {
   const info = policyFor(mac);
-  const on = info.policy === "proxy";
+  const total = totalProxyOn();
+  const on = total && info.policy === "proxy";
   const button = el("button", `policy-switch ${on ? "on" : "off"}`);
   button.type = "button";
   button.setAttribute("role", "switch");
   button.setAttribute("aria-checked", on ? "true" : "false");
   button.dataset.mac = mac;
-  button.title = on ? "当前：走代理（点击改为直连）" : "当前：直连（点击改为走代理）";
-  button.disabled = state.policyBusy;
+  button.title = !total
+    ? "总代理已关闭，设备开关不生效"
+    : on ? "当前：走代理（点击改为直连）" : "当前：直连（点击改为走代理）";
+  button.disabled = state.policyBusy || !total;
   button.appendChild(el("span", "knob"));
-  button.appendChild(el("span", "label", on ? "走代理" : "直连"));
+  button.appendChild(el("span", "label", !total ? "总代理关" : on ? "走代理" : "直连"));
   const next = on ? "direct" : "proxy";
   button.addEventListener("click", () => setDevicePolicy(mac, next));
   return button;
+}
+
+function renderHostSwitch() {
+  const proxy = (state.status || {}).proxy || {};
+  const total = totalProxyOn();
+  const on = total && Boolean(proxy.tun);
+  const button = el("button", `policy-switch ${on ? "on" : "off"}`);
+  button.type = "button";
+  button.setAttribute("role", "switch");
+  button.setAttribute("aria-checked", on ? "true" : "false");
+  button.dataset.host = "1";
+  button.title = !total
+    ? "总代理已关闭，主机开关不生效"
+    : on ? "主机走代理（TUN 开），点击关闭" : "主机直连（TUN 关），点击开启";
+  button.disabled = state.policyBusy || !total;
+  button.appendChild(el("span", "knob"));
+  button.appendChild(el("span", "label", !total ? "总代理关" : on ? "走代理" : "直连"));
+  button.addEventListener("click", () => setHostProxy(!on));
+  return button;
+}
+
+async function setHostProxy(enable) {
+  if (state.policyBusy) return;
+  state.policyBusy = true;
+  renderDevices();
+  try {
+    const result = await fetchJSON("/api/proxy/host", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enable }),
+    });
+    if (!result.ok) throw new Error(result.error || "主机代理切换失败");
+  } catch (error) {
+    console.error(error);
+    window.alert(error.message || "主机代理切换失败");
+  } finally {
+    state.policyBusy = false;
+    try {
+      await refresh();
+    } catch (error) {
+      console.error(error);
+    }
+  }
 }
 
 function renderPolicyDefault() {
@@ -1055,7 +1113,7 @@ function renderPolicyDefault() {
   const current = (state.devicePolicies || {}).default || "direct";
   box.querySelectorAll("button").forEach((button) => {
     button.classList.toggle("active", button.dataset.policy === current);
-    button.disabled = state.policyBusy;
+    button.disabled = state.policyBusy || !totalProxyOn();
   });
 }
 

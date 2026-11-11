@@ -310,7 +310,13 @@ def build_devices(
             device["interface"] = _iface_for_ip(interfaces, device.get("ip") or "")
 
     if config.hide_local_addresses:
-        devices = {key: dev for key, dev in devices.items() if not dev.get("is_local")}
+        # 保留 USB 网口本机行：它是主机代理开关的入口
+        devices = {
+            key: dev
+            for key, dev in devices.items()
+            if not dev.get("is_local")
+            or str(dev.get("name") or "").startswith("本机（USB 网口")
+        }
 
     return devices
 

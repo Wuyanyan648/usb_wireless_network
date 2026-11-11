@@ -135,6 +135,32 @@ def _ensure_device_stats(config: Config) -> None:
     device_stats.ensure_if_missing(config)
 
 
+def host_proxy_pref(config: Config) -> bool:
+    """主机（TUN）代理的持久选择；总开关只控制生效，不改这个值。"""
+    path = Path(config.data_dir) / "host_proxy.json"
+    try:
+        return bool(json.loads(path.read_text()).get("enabled", True))
+    except (OSError, ValueError, AttributeError):
+        return True
+
+
+def save_host_proxy_pref(config: Config, enabled: bool) -> None:
+    path = Path(config.data_dir) / "host_proxy.json"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({"enabled": bool(enabled)}))
+    except OSError:
+        pass
+
+
+def set_host_proxy(config: Config, enabled: bool) -> dict[str, Any]:
+    """只切 TUN，不动 TPROXY 表与设备策略（主机与下游互不依赖）。"""
+    result = clash_patch(config, {"tun": {"enable": bool(enabled)}})
+    if result["ok"]:
+        save_host_proxy_pref(config, enabled)
+    return result
+
+
 def set_proxy(config: Config, enable: bool, mode: str) -> dict[str, Any]:
     """按当前模式选择透明代理方式。
 
@@ -169,6 +195,9 @@ def set_proxy(config: Config, enable: bool, mode: str) -> dict[str, Any]:
         result = set_tun(config, True)
     if result.get("ok"):
         mark_proxy(config, "tproxy" if result.get("kind") == "tproxy" else "tun")
+        # 总开关重新打开时按主机开关的持久选择恢复，而不是一律开 TUN
+        if not host_proxy_pref(config):
+            clash_patch(config, {"tun": {"enable": False}})
     _ensure_device_stats(config)
     return result
 
