@@ -101,17 +101,12 @@
       <section class="card" id="deviceSection">
         <div class="card-head">
           <h2>设备</h2>
-          <span class="hint" id="deviceMeta">在线状态、速率、流量与代理策略</span>
+          <span class="hint" id="deviceMeta">在线状态、速率与流量</span>
           <div class="table-tools">
-            <div class="segmented policy-default" id="policyDefault" title="没单独设置的设备使用这个默认策略">
-              <button data-policy="direct" type="button">默认直连</button>
-              <button data-policy="proxy" type="button">默认代理</button>
-            </div>
             <div class="segmented" id="deviceFilter">
               <button data-filter="all" class="active" type="button">全部</button>
               <button data-filter="online" type="button">在线</button>
               <button data-filter="offline" type="button">离线</button>
-              <button data-filter="proxied" type="button">走代理</button>
             </div>
             <input id="deviceSearch" class="search" type="search" placeholder="搜索 IP / MAC / 名称" autocomplete="off">
           </div>
@@ -122,7 +117,6 @@
               <tr>
                 <th>状态</th>
                 <th>设备</th>
-                <th class="policy-col">代理</th>
                 <th>IP / MAC</th>
                 <th class="num">下行</th>
                 <th class="num">上行</th>

@@ -46,7 +46,6 @@ const state = {
   systemHealthTimer: null,
   usageTrendChart: null,
   systemHealthChart: null,
-  devicePolicies: null,
   traffic: null,
   policyBusy: false,
 };
@@ -160,19 +159,16 @@ async function refresh() {
   if (state.busy) return;
   state.busy = true;
   try {
-    const [status, events, rates, policies] = await Promise.all([
+    const [status, events, rates] = await Promise.all([
       fetchJSON("/api/status"),
       fetchJSON("/api/events?limit=40"),
       fetchJSON("/api/devices/traffic").catch(() => ({ items: [] })),
-      fetchJSON("/api/devices/policies").catch(() => null),
     ]);
     state.status = status;
     state.lastStatusAt = Date.now();
     state.traffic = rates;
-    if (policies) state.devicePolicies = policies;
     setService(true);
     renderAll(status, events.items || []);
-    renderPolicyDefault();
     setText("lastUpdate", `更新于 ${fmtTime(status.ts)}`);
   } catch (error) {
     setService(false);
@@ -275,9 +271,7 @@ function renderSummary(status) {
   setText("statDevices", `${summary.online || 0}/${summary.total || 0}`);
   setText(
     "statDevicesSub",
-    `AP ${summary.wifi_ap || 0} · 有线 ${summary.wired || 0} · 走代理 ${
-      summary.proxied || 0
-    }`
+    `AP ${summary.wifi_ap || 0} · 有线 ${summary.wired || 0}`
   );
 
   setText("statThroughput", `↓ ${fmtRate(uplink.rx_rate)}`);
@@ -993,7 +987,15 @@ function deviceRow(item) {
     nameLine.appendChild(el("span", "type-badge", item.vendor));
   }
   if (item.name_note) nameLine.title = item.name_note;
-  nameCell.appendChild(nameLine);
+  // 本机（USB 网口）这一行的主机 TUN 开关，占位在设备名下面，不再单独占一列
+  if (item.is_local && /USB 网口/.test(item.name || "")) {
+    const hostLine = el("div", "cell-sub host-switch-line");
+    hostLine.appendChild(renderHostSwitch());
+    nameCell.appendChild(nameLine);
+    nameCell.appendChild(hostLine);
+  } else {
+    nameCell.appendChild(nameLine);
+  }
   const sub = [];
   if (item.type) sub.push(typeLabel(item.type));
   if (item.signal_dbm !== null && item.signal_dbm !== undefined) sub.push(`${item.signal_dbm} dBm`);
@@ -1001,19 +1003,6 @@ function deviceRow(item) {
   if (!online && item.lease_only) sub.push("DHCP 租约");
   if (sub.length) nameCell.appendChild(el("div", "cell-sub", sub.join(" · ")));
   row.appendChild(nameCell);
-
-  const policyCell = el("td", "policy-cell");
-  const isHostRow = item.is_local && /USB 网口/.test(item.name || "");
-  if (isHostRow) {
-    policyCell.appendChild(renderHostSwitch());
-  } else if (item.mac && policyFor(item.mac)) {
-    // 只有下游网段里可管控的设备才有开关；上游光猫等不参与默认代理
-    policyCell.appendChild(renderPolicySwitch(item.mac));
-  } else {
-    policyCell.textContent = "—";
-    if (item.mac) policyCell.title = "不在下游网段，不参与代理策略";
-  }
-  row.appendChild(policyCell);
 
   const idCell = el("td");
   idCell.appendChild(el("div", "mono", item.ip || "—"));
@@ -1044,36 +1033,10 @@ function deviceRow(item) {
   return row;
 }
 
-function policyFor(mac) {
-  const data = state.devicePolicies || {};
-  return (data.items || []).find((row) => row.mac === mac) || null;
-}
-
 function totalProxyOn() {
-  const data = state.devicePolicies || {};
-  if (data.total !== undefined) return Boolean(data.total);
   const proxy = (state.status || {}).proxy || {};
-  return Boolean(proxy.tun || proxy.tproxy);
-}
-
-function renderPolicySwitch(mac) {
-  const info = policyFor(mac);
-  const total = totalProxyOn();
-  const on = total && Boolean(info && info.policy === "proxy");
-  const button = el("button", `policy-switch ${on ? "on" : "off"}`);
-  button.type = "button";
-  button.setAttribute("role", "switch");
-  button.setAttribute("aria-checked", on ? "true" : "false");
-  button.dataset.mac = mac;
-  button.title = !total
-    ? "总代理已关闭，设备开关不生效"
-    : on ? "当前：走代理（点击改为直连）" : "当前：直连（点击改为走代理）";
-  button.disabled = state.policyBusy || !total;
-  button.appendChild(el("span", "knob"));
-  button.appendChild(el("span", "label", !total ? "总代理关" : on ? "走代理" : "直连"));
-  const next = on ? "direct" : "proxy";
-  button.addEventListener("click", () => setDevicePolicy(mac, next));
-  return button;
+  // 总开关以实际生效为准：TPROXY 表在装，或主机流量真的走 TUN
+  return Boolean(proxy.tproxy || proxy.tun);
 }
 
 function renderHostSwitch() {
@@ -1119,67 +1082,9 @@ async function setHostProxy(enable) {
   }
 }
 
-function renderPolicyDefault() {
-  const box = $("policyDefault");
-  if (!box) return;
-  const current = (state.devicePolicies || {}).default || "proxy";
-  box.querySelectorAll("button").forEach((button) => {
-    button.classList.toggle("active", button.dataset.policy === current);
-    button.disabled = state.policyBusy || !totalProxyOn();
-  });
-}
-
-async function setDevicePolicy(mac, policy) {
-  if (state.policyBusy) return;
-  state.policyBusy = true;
-  renderDevices();
-  try {
-    const response = await fetch("/api/devices/policy", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mac, policy }),
-    });
-    const data = await response.json();
-    // 装表失败时后端会把策略回滚成直连，并返回失败的那一步（install.steps）
-    if (!response.ok || !data.ok) {
-      throw new Error(data.error || data.install?.detail || "设置失败");
-    }
-    state.devicePolicies = data;
-  } catch (error) {
-    alert(`设备代理策略设置失败: ${error.message}`);
-  } finally {
-    state.policyBusy = false;
-    await refresh();
-  }
-}
-
-async function setDefaultPolicy(policy) {
-  if (state.policyBusy) return;
-  state.policyBusy = true;
-  renderPolicyDefault();
-  try {
-    const response = await fetch("/api/devices/policy/default", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ policy }),
-    });
-    const data = await response.json();
-    if (!response.ok || !data.ok) {
-      throw new Error(data.error || data.install?.detail || "设置失败");
-    }
-    state.devicePolicies = data;
-  } catch (error) {
-    alert(`默认代理策略设置失败: ${error.message}`);
-  } finally {
-    state.policyBusy = false;
-    await refresh();
-  }
-}
-
 function deviceMatches(item) {
   if (state.deviceFilter === "online" && item.online === false) return false;
   if (state.deviceFilter === "offline" && item.online !== false) return false;
-  if (state.deviceFilter === "proxied" && policyFor(item.mac).policy !== "proxy") return false;
   if (!state.search) return true;
   const haystack = [
     item.name,
@@ -2505,14 +2410,6 @@ function bindFilters() {
     search.addEventListener("input", () => {
       state.search = search.value.trim().toLowerCase();
       renderDevices();
-    });
-  }
-
-  const defaultPolicy = $("policyDefault");
-  if (defaultPolicy) {
-    defaultPolicy.addEventListener("click", (event) => {
-      const button = event.target.closest("button[data-policy]");
-      if (button) setDefaultPolicy(button.dataset.policy);
     });
   }
 }

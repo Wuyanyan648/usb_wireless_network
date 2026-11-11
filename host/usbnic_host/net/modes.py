@@ -17,15 +17,15 @@ MODES: dict[str, dict[str, str]] = {
     },
     "hotspot": {
         "label": "USB WiFi AP",
-        "desc": "板载 WiFi 上网 + USB 开热点；本机与下游都走代理",
+        "desc": "板载 WiFi 上网 + USB 开热点；本机与下游都经代理转发",
     },
     "gateway": {
         "label": "家庭网关",
-        "desc": "光猫 → 有线 → USB 共享；本机与下游都走代理",
+        "desc": "光猫 → 有线 → USB 共享；本机与下游都经代理转发",
     },
     "router": {
         "label": "移动路由器",
-        "desc": "有线扩展口 + 5G AP（2.4G 默认关闭，避免与上游 AP 同频）；有线直连、无线走代理（手动切换）",
+        "desc": "有线扩展口 + 5G AP（2.4G 默认关闭，避免与上游 AP 同频）；有线直连、无线经代理转发（手动切换）",
     },
 }
 

@@ -27,7 +27,6 @@ from .monitor.proxy import (
     set_proxy,
     tproxy_installed,
 )
-from .monitor import device_policy
 from .monitor.throughput import ThroughputMonitor
 from .net.modes import MODES, MODE_PROXY, apply_mode
 from .net.router import invalidate_router_status, probe_5g_ap, router_status
@@ -68,15 +67,6 @@ class KeepRequest(BaseModel):
     enabled: bool = False
 
 
-class DevicePolicyRequest(BaseModel):
-    mac: str
-    policy: str
-
-
-class DefaultPolicyRequest(BaseModel):
-    policy: str
-
-
 # 这些模式下下游流量需要 TPROXY；client 模式只代理本机，不装表
 TPROXY_MODES = ("gateway", "router", "hotspot", "tun")
 
@@ -105,18 +95,6 @@ def _install_tproxy_if_needed(config: Config, monitor: Monitor) -> dict:
         "detail": str(result.get("detail") or result.get("error") or ""),
         "steps": result.get("steps") or [],
     }
-
-
-def _install_error(install: dict) -> str:
-    """把装表结果里失败的那一步拼进提示，便于页面直接显示。"""
-    detail = str(install.get("detail") or "装表失败")
-    for step in install.get("steps") or []:
-        if step.get("ok"):
-            continue
-        name = str(step.get("name") or "step")
-        extra = str(step.get("detail") or step.get("error") or "").strip()
-        return f"{detail}（{name}: {extra}）" if extra else f"{detail}（{name}）"
-    return detail
 
 
 def create_app(monitor: Monitor, config: Config) -> FastAPI:
@@ -335,70 +313,6 @@ def create_app(monitor: Monitor, config: Config) -> FastAPI:
     def devices_traffic() -> dict:
         """按设备的下行/上行实时速率与累计量（只读，来自 nftables 计数器）。"""
         return throughput.device_snapshot()
-
-    @app.get("/api/devices/policies")
-    def devices_policies() -> dict:
-        """设备级策略：谁走代理、谁直连，以及当前是否已生效。"""
-        data = device_policy.table(config)
-        proxy_state = monitor.snapshot().get("proxy", {})
-        saved = state.load(config.data_dir) or {}
-        # 总开关是否开启以持久记录为准：主机 TUN 关掉、暂无设备走代理时仍是开启态
-        data["total"] = bool(saved.get("proxy") or proxy_state.get("tproxy"))
-        return data
-
-    @app.put("/api/devices/policy")
-    def devices_policy(body: DevicePolicyRequest) -> dict:
-        result = device_policy.set_device(config, body.mac, body.policy)
-        if not result["ok"]:
-            return JSONResponse(status_code=400, content=result)
-        # 代理已开启时，把设备改成"走代理"应当立刻装表，而不是等下一次代理开关
-        if body.policy == "proxy":
-            install = _install_tproxy_if_needed(config, monitor)
-            result["install"] = install
-            if not install.get("ok"):
-                # 装表失败就把策略回滚，别让开关显示"走代理"而 effective 是直连
-                device_policy.set_device(config, body.mac, "direct")
-                refresh_proxy_set(config)
-                return JSONResponse(
-                    status_code=409,
-                    content={
-                        **device_policy.table(config),
-                        "ok": False,
-                        "error": _install_error(install),
-                        "install": install,
-                    },
-                )
-        result["refresh"] = refresh_proxy_set(config)
-        result.update(device_policy.table(config))
-        return result
-
-    @app.put("/api/devices/policy/default")
-    def devices_policy_default(body: DefaultPolicyRequest) -> dict:
-        previous = device_policy.default_policy(config)
-        result = device_policy.set_default(config, body.policy)
-        if not result["ok"]:
-            return JSONResponse(status_code=400, content=result)
-        # 默认代理意味着"所有未显式直连的设备都要走代理"，立刻装表并刷新集合；
-        # 总开关关着时只存策略，等总开关打开再生效。
-        saved = state.load(config.data_dir) or {}
-        if body.policy == "proxy" and saved.get("proxy"):
-            install = _install_tproxy_if_needed(config, monitor)
-            result["install"] = install
-            if not install.get("ok"):
-                device_policy.set_default(config, previous)
-                refresh_proxy_set(config)
-                return JSONResponse(
-                    status_code=409,
-                    content={
-                        **device_policy.table(config),
-                        "ok": False,
-                        "error": _install_error(install),
-                        "install": install,
-                    },
-                )
-        result["refresh"] = refresh_proxy_set(config)
-        result.update(device_policy.table(config))
-        return result
 
     @app.get("/api/router/status")
     def router_info() -> dict:

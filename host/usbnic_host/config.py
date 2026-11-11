@@ -6,16 +6,6 @@ from typing import Any
 
 import yaml
 
-from .util import normalize_mac
-
-# 设备级代理策略只有两种：走代理、直连。默认直连，保证装表之外的行为不变。
-POLICIES = ("proxy", "direct")
-
-
-def _policy(value: Any, fallback: str = "direct") -> str:
-    text = str(value or "").strip().lower()
-    return text if text in POLICIES else fallback
-
 
 @dataclass
 class Config:
@@ -103,11 +93,6 @@ class Config:
     tproxy_exclude_ips: list[str] = field(default_factory=list)
     # 装表后的观察窗口（秒）：窗口内命中不增长且下游有流量就自动撤表；0 表示不校验
     tproxy_verify_seconds: float = 5.0
-    # 设备级代理策略：全局默认（direct 保持现有行为），可按 MAC 单独覆盖
-    tproxy_default_policy: str = "proxy"
-    # host.yaml 里的初始策略；运行期以 data_dir 下的 JSON 文件为准
-    device_policies: dict[str, str] = field(default_factory=dict)
-    device_policies_file: str = "device_policies.json"
     # ---------- 使用时长 / 系统健康（并入 usbnicd，不单独起服务） ----------
     usage_enabled: bool = True
     # 活动窗口查询间隔（秒）：每次只查一次 _NET_ACTIVE_WINDOW
@@ -247,19 +232,6 @@ class Config:
                 if str(item).strip()
             ],
             tproxy_verify_seconds=float(raw.get("tproxy_verify_seconds", 5.0)),
-            tproxy_default_policy=_policy(raw.get("tproxy_default_policy", "proxy")),
-            device_policies={
-                mac: _policy(policy)
-                for mac, policy in (
-                    (normalize_mac(str(key)), value)
-                    for key, value in (raw.get("device_policies") or {}).items()
-                )
-                if mac
-            },
-            device_policies_file=str(
-                raw.get("device_policies_file", "device_policies.json")
-                or "device_policies.json"
-            ),
             usage_enabled=bool(raw.get("usage_enabled", True)),
             usage_sample_interval=float(raw.get("usage_sample_interval", 4.0)),
             usage_idle_seconds=float(raw.get("usage_idle_seconds", 300.0)),
@@ -320,7 +292,6 @@ class Config:
             "clash_redir_port": self.clash_redir_port,
             "tproxy_exclude_ips": list(self.tproxy_exclude_ips),
             "tproxy_verify_seconds": self.tproxy_verify_seconds,
-            "tproxy_default_policy": self.tproxy_default_policy,
             "usage_enabled": self.usage_enabled,
             "usage_sample_interval": self.usage_sample_interval,
             "usage_idle_seconds": self.usage_idle_seconds,

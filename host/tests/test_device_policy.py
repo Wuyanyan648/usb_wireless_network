@@ -13,48 +13,45 @@ def _config(tmp_path: Path) -> Config:
         lan_cidr="10.10.10.0/24",
         clash_tproxy_port=7896,
         data_dir=tmp_path,
-        tproxy_default_policy="direct",
     )
 
 
-def test_policy_defaults_to_direct(tmp_path: Path) -> None:
+def test_policy_is_always_proxy(tmp_path: Path) -> None:
+    """不再有逐设备策略：任何 MAC 都固定走代理，也不读写策略文件。"""
     config = _config(tmp_path)
+    (tmp_path / "device_policies.json").write_text(
+        '{"default": "direct", "devices": {"aa:bb:cc:dd:ee:ff": "direct"}}',
+        encoding="utf-8",
+    )
     data = device_policy.load(config)
-    assert data["default"] == "direct"
-    assert data["devices"] == {}
-    assert device_policy.resolve(config, "aa:bb:cc:dd:ee:ff") == "direct"
-
-
-def test_policy_roundtrip_and_override(tmp_path: Path) -> None:
-    config = _config(tmp_path)
-    assert device_policy.set_device(config, "AA-BB-CC-DD-EE-FF", "proxy")["ok"]
+    assert data == {"default": "proxy", "devices": {}}
     assert device_policy.resolve(config, "aa:bb:cc:dd:ee:ff") == "proxy"
-    assert device_policy.resolve(config, "aa:bb:cc:dd:ee:00") == "direct"
-
-    assert device_policy.set_default(config, "proxy")["ok"]
-    assert device_policy.resolve(config, "aa:bb:cc:dd:ee:00") == "proxy"
-    # 单独设置为直连的设备仍保持直连
-    assert device_policy.resolve(config, "aa:bb:cc:dd:ee:ff") == "proxy"
-    device_policy.set_device(config, "aa:bb:cc:dd:ee:ff", "direct")
-    assert device_policy.resolve(config, "aa:bb:cc:dd:ee:ff") == "direct"
-
-    # 非法值不落盘
-    assert not device_policy.set_device(config, "bad", "proxy")["ok"]
-    assert not device_policy.set_default(config, "auto")["ok"]
 
 
-def test_assignments_split_proxy_and_direct_ips(tmp_path: Path) -> None:
+def test_assignments_takes_all_downstream_ips(tmp_path: Path) -> None:
     config = _config(tmp_path)
-    device_policy.set_device(config, "aa:bb:cc:dd:ee:01", "proxy")
     items = [
         {"ip": "10.10.10.101", "mac": "aa:bb:cc:dd:ee:01"},
         {"ip": "10.10.10.110", "mac": "aa:bb:cc:dd:ee:02"},
         {"ip": "10.10.10.111", "mac": ""},
+        {"ip": "10.10.10.1", "mac": "aa:bb:cc:dd:ee:99", "is_local": True},
     ]
     proxy_ips, direct_ips = device_policy.assignments(config, items)
-    assert proxy_ips == ["10.10.10.101"]
-    # 没有 MAC 的条目无法按设备判定，按直连处理
-    assert direct_ips == ["10.10.10.110"]
+    # 没有 MAC 的条目无法按设备判定；is_local 的本机地址不进下游集合
+    assert proxy_ips == ["10.10.10.101", "10.10.10.110"]
+    assert direct_ips == []
+
+
+def test_table_reports_direct_when_tproxy_off(tmp_path: Path, monkeypatch) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr(device_policy, "_tproxy_active", lambda: False)
+    items = [{"ip": "10.10.10.101", "mac": "aa:bb:cc:dd:ee:01"}]
+    table = device_policy.table(config, items)
+    assert table["default"] == "proxy"
+    # 没有装表时 effective 必须是 direct，页面才不会假装"已走代理"
+    assert table["active"] is False
+    assert table["items"][0]["policy"] == "proxy"
+    assert table["items"][0]["effective"] == "direct"
 
 
 def test_ruleset_orders_direct_before_tproxy() -> None:
@@ -80,34 +77,3 @@ def test_ruleset_orders_direct_before_tproxy() -> None:
 def test_ruleset_skips_when_no_device_selected() -> None:
     config = Config(gateway_iface="enx-test", clash_tproxy_port=7896)
     assert tproxy_ruleset(config, proxy_nets=[], direct_nets=["10.10.10.110"]) == ""
-
-
-def test_default_is_proxy_without_config(tmp_path: Path) -> None:
-    """总开关一打开就默认全代理：文件缺失时默认值必须是 proxy。"""
-    config = Config(
-        gateway_iface="enx-test", lan_cidr="10.10.10.0/24", data_dir=tmp_path
-    )
-    assert device_policy.load(config)["default"] == "proxy"
-    assert device_policy.resolve(config, "aa:bb:cc:dd:ee:ff") == "proxy"
-
-
-def test_switching_default_keeps_explicit_overrides(tmp_path: Path) -> None:
-    config = _config(tmp_path)
-    device_policy.set_device(config, "aa:bb:cc:dd:ee:01", "direct")
-    assert device_policy.set_default(config, "proxy")["ok"]
-    data = device_policy.load(config)
-    assert data["devices"]["aa:bb:cc:dd:ee:01"] == "direct"
-    assert device_policy.resolve(config, "aa:bb:cc:dd:ee:01") == "direct"
-    assert device_policy.resolve(config, "aa:bb:cc:dd:ee:02") == "proxy"
-
-
-def test_assignments_excludes_local_host(tmp_path: Path) -> None:
-    config = _config(tmp_path)
-    device_policy.set_default(config, "proxy")
-    items = [
-        {"ip": "10.10.10.1", "mac": "aa:bb:cc:dd:ee:99", "is_local": True},
-        {"ip": "10.10.10.120", "mac": "aa:bb:cc:dd:ee:02"},
-    ]
-    proxy_ips, direct_ips = device_policy.assignments(config, items)
-    assert proxy_ips == ["10.10.10.120"]
-    assert direct_ips == []

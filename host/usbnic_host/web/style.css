@@ -726,12 +726,13 @@ input {
   border-color: color-mix(in srgb, var(--red) 32%, var(--border));
 }
 
-.policy-col {
-  width: 88px;
-}
-
 .policy-cell {
   white-space: nowrap;
+}
+
+/* 本机（USB 网口）行里的主机 TUN 开关，放在设备名下面 */
+.host-switch-line {
+  margin-top: 3px;
 }
 
 .policy-switch {
@@ -789,10 +790,6 @@ input {
 .policy-switch:disabled {
   opacity: 0.55;
   cursor: default;
-}
-
-.policy-default {
-  margin-left: auto;
 }
 
 .chain-list {

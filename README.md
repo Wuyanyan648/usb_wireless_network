@@ -424,23 +424,16 @@ TPROXY 只匹配配置中的下游接口与网段，LAN 互访和上游光猫网
 
 开启代理时会先检查 Clash 内核：已运行就直接复用；未运行则通过 Clash Verge 的 root 服务自动拉起（`clash_service_api`），所以开机后不需要手动打开 Clash。服务不可用时会尝试直接启动 `verge-mihomo`。
 
-#### 设备级代理管控（谁走代理、谁直连）
+#### 统一代理开关（不区分下游设备）
 
-设备列表每行新增「代理策略」开关，配合表头的「默认直连 / 默认代理」，按 **MAC** 决定单台设备走代理还是直连，IP 只是 ARP / DHCP 租约给出的瞬时映射：
+不再提供按设备的代理开关：总开关打开时，所有下游设备一起经代理转发；关闭时立即撤表、清空 provider，全部回到直连。
 
-| 功能 | 接口 |
-| --- | --- |
-| 设备策略列表（含当前生效状态） | `GET /api/devices/policies` |
-| 设置单台设备 | `PUT /api/devices/policy`，body `{"mac": "aa:bb:cc:dd:ee:ff", "policy": "proxy"}` |
-| 设置全局默认 | `PUT /api/devices/policy/default`，body `{"policy": "proxy"}` |
-
-- 策略只有 `proxy` / `direct` 两种，全局默认是 `proxy`：**总开关一打开，所有下游设备默认走代理**，只有用户显式点成 `direct` 的设备才直连（显式项持久保存，切换默认值不会覆盖它们）。页面上的修改写入 `data_dir/device_policies.json`，优先于 `host.yaml` 的初始值。
-- 底层是 nft 集合：`proxy_nets` 放"走代理"设备的当前 IP，`direct_nets` 放显式直连的 IP。规则顺序固定为 `直连集合 → 白名单 → tproxy`，直连设备永不被劫持。
-- ARP / DHCP 租约变化时，吞吐采样线程每 10 秒刷新一次集合，DHCP 换 IP 不会把策略带错。
-- 没有任何设备选择走代理时**不装表**，只开 TUN，下游保持普通 NAT。
-- 走代理的下游设备会**强制全走代理**：usbnicd 把它们的当前 IP 写进 mihomo 的 `usbnic-proxy` rule-provider（classical，内容是 `SRC-IP-CIDR,<ip>/32`），规则链最前面的 `RULE-SET,usbnic-proxy,PROXY` 排在 `GEOIP,CN,DIRECT` 之前，因此不会被国内规则拦成直连。provider 目录由 `clash_ruleset_dir` 指定，刷新用 `PUT /providers/rules/usbnic-proxy`，不重载 mihomo；撤表或总开关关闭时 provider 会被清空。
-- 设备改成「走代理」时同步装表；装表失败会把策略回滚成 `direct`，接口返回 409 并指出失败的那一步（`install.steps`）。
-- 撤销：页面点回「直连」并把默认改回「直连」，程序会自动撤表；或 `sudo python3 -m usbnic_host.cleanup`。
+- 设备列表只显示状态、速率、累计流量，没有「代理」列，也没有「默认直连 / 默认代理」按钮。
+- 下游集合由 ARP / DHCP 租约自动维护：`proxy_nets` 放全部下游设备当前 IP（本机地址除外），每 10 秒刷新一次。
+- 走代理的下游设备会**强制全走代理**：usbnicd 把这些 IP 写进 mihomo 的 `usbnic-proxy` rule-provider（classical，内容是 `SRC-IP-CIDR,<ip>/32`），规则链最前面的 `RULE-SET,usbnic-proxy,PROXY` 排在 `GEOIP,CN,DIRECT` 之前，因此不会被国内规则拦成直连。provider 目录由 `clash_ruleset_dir` 指定，刷新用 `PUT /providers/rules/usbnic-proxy`，不重载 mihomo；撤表或总开关关闭时 provider 会被清空。
+- 总开关状态以**实际生效**为准（nft 表在装 + `fwmark 0x1` 规则存在 + mihomo 在代理下游），不读配置里的意愿值；表被意外删除时会自动补装（30 秒节流）。
+- 页面仍保留主机那一行的 TUN 开关，用于单独控制本机是否走代理。
+- 撤销：关闭总开关，或 `sudo python3 -m usbnic_host.cleanup`。
 
 **两处已知根因的处理**：
 
@@ -551,10 +544,7 @@ tproxy_verify_seconds: 5
 # mihomo rule-provider 目录：usbnicd 维护 usbnic-proxy.yaml，留空表示不启用
 clash_ruleset_dir: /path/to/clash-verge/ruleset
 
-# 设备级代理策略：默认全代理（显式 direct 的设备才直连）；运行期设置写入 data_dir/device_policies.json
-tproxy_default_policy: proxy
-device_policies: {}                  # 首次生成的初始值（MAC -> proxy/direct），留空即全部跟随默认
-device_policies_file: device_policies.json
+# 下游设备不区分策略：总开关打开时全部经代理转发，关闭时全部直连
 
 # 使用时长 / 系统健康（并入 usbnicd）
 usage_enabled: true

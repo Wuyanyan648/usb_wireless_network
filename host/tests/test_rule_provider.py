@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from usbnic_host.api import _install_error
 from usbnic_host.config import Config
 from usbnic_host.monitor import rule_provider
 
@@ -56,18 +55,3 @@ def test_sync_writes_file_and_reloads(tmp_path: Path, monkeypatch) -> None:
     assert cleared["ok"] is True
     assert target.read_text(encoding="utf-8") == "payload: []\n"
     assert len(calls) == 2
-
-
-def test_install_error_names_failed_step() -> None:
-    message = _install_error(
-        {
-            "ok": False,
-            "detail": "7896 未监听",
-            "steps": [
-                {"name": "clash", "ok": True},
-                {"name": "listener", "ok": False, "detail": "7896 未监听"},
-            ],
-        }
-    )
-    assert "listener" in message
-    assert "7896 未监听" in message
