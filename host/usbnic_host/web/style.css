@@ -300,15 +300,22 @@ input {
 
 .grid-main {
   display: grid;
-  grid-template-columns: minmax(0, 0.72fr) minmax(0, 1.28fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 16px;
   margin-bottom: 16px;
 }
 
-/* 设备表固定在第二栏顶部，进页面第一屏即可见 */
+/* 设备表独占整栏：紧跟横向的上行卡片 */
+.uplink-card {
+  order: -2;
+}
+
 #deviceSection {
-  grid-column: 2;
-  grid-row: 1;
+  order: -1;
+  align-self: start;
+}
+
+#ifaceSection {
   align-self: start;
 }
 
@@ -336,8 +343,6 @@ input {
 }
 
 #ifaceSection {
-  grid-column: 1;
-  grid-row: 2;
   align-self: start;
 }
 
@@ -411,13 +416,17 @@ input {
 }
 
 .uplink-row {
-  display: grid;
-  grid-template-columns: minmax(0, 0.85fr) minmax(0, 1.15fr);
+  display: flex;
+  align-items: center;
   gap: 20px;
 }
 
 .uplink-main {
   min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 22px;
+  flex: 0 1 auto;
 }
 
 .hotspot-grid {
@@ -1256,8 +1265,7 @@ button.proxy-node:disabled {
   }
 
   #deviceSection {
-    grid-column: auto;
-    grid-row: auto;
+    align-self: stretch;
   }
 }
 
