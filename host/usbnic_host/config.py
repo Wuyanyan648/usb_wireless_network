@@ -96,10 +96,13 @@ class Config:
     speedtest_max_mb: int = 350
     clash_tproxy_port: int = 7896
     clash_redir_port: int = 7895
+    # mihomo 的 rule-provider 目录；usbnicd 在这里维护 usbnic-proxy.yaml，
+    # 让被 TPROXY 接住的下游设备排在 GEOIP,CN 之前全走代理。留空表示不启用。
+    clash_ruleset_dir: str = ""
     # TPROXY 永不接管的源地址：走有线直连、正在大流量下载的设备（如 Switch 2）
     tproxy_exclude_ips: list[str] = field(default_factory=list)
     # 装表后的观察窗口（秒）：窗口内命中不增长且下游有流量就自动撤表；0 表示不校验
-    tproxy_verify_seconds: float = 25.0
+    tproxy_verify_seconds: float = 5.0
     # 设备级代理策略：全局默认（direct 保持现有行为），可按 MAC 单独覆盖
     tproxy_default_policy: str = "direct"
     # host.yaml 里的初始策略；运行期以 data_dir 下的 JSON 文件为准
@@ -145,6 +148,7 @@ class Config:
                 raw.get("clash_service_api", "http://127.0.0.1:33211")
             ).rstrip("/"),
             clash_secret=str(raw.get("clash_secret", "") or ""),
+            clash_ruleset_dir=str(raw.get("clash_ruleset_dir", "") or ""),
             oui_file=str(raw.get("oui_file", "/usr/share/ieee-data/oui.txt")),
             uplink_candidates=list(raw.get("uplink_candidates", []) or []),
             exclude_interfaces=list(
@@ -242,7 +246,7 @@ class Config:
                 for item in (raw.get("tproxy_exclude_ips") or [])
                 if str(item).strip()
             ],
-            tproxy_verify_seconds=float(raw.get("tproxy_verify_seconds", 25.0)),
+            tproxy_verify_seconds=float(raw.get("tproxy_verify_seconds", 5.0)),
             tproxy_default_policy=_policy(raw.get("tproxy_default_policy", "direct")),
             device_policies={
                 mac: _policy(policy)

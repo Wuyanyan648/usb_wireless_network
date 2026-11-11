@@ -438,6 +438,8 @@ TPROXY 只匹配配置中的下游接口与网段，LAN 互访和上游光猫网
 - 底层是 nft 集合：`proxy_nets` 放"走代理"设备的当前 IP，`direct_nets` 放显式直连的 IP。规则顺序固定为 `直连集合 → 白名单 → tproxy`，直连设备永不被劫持。
 - ARP / DHCP 租约变化时，吞吐采样线程每 10 秒刷新一次集合，DHCP 换 IP 不会把策略带错。
 - 没有任何设备选择走代理时**不装表**，只开 TUN，下游保持普通 NAT。
+- 走代理的下游设备会**强制全走代理**：usbnicd 把它们的当前 IP 写进 mihomo 的 `usbnic-proxy` rule-provider（classical，内容是 `SRC-IP-CIDR,<ip>/32`），规则链最前面的 `RULE-SET,usbnic-proxy,PROXY` 排在 `GEOIP,CN,DIRECT` 之前，因此不会被国内规则拦成直连。provider 目录由 `clash_ruleset_dir` 指定，刷新用 `PUT /providers/rules/usbnic-proxy`，不重载 mihomo；撤表或总开关关闭时 provider 会被清空。
+- 设备改成「走代理」时同步装表；装表失败会把策略回滚成 `direct`，接口返回 409 并指出失败的那一步（`install.steps`）。
 - 撤销：页面点回「直连」并把默认改回「直连」，程序会自动撤表；或 `sudo python3 -m usbnic_host.cleanup`。
 
 **两处已知根因的处理**：
@@ -545,7 +547,9 @@ clash_tproxy_port: 7896
 # TPROXY 永不接管的下游源地址（按 IP 兜底，设备级策略已能按 MAC 精确控制）
 tproxy_exclude_ips: []
 # 装表后的观察窗口：窗口内下游有流量但 mihomo 侧没有下游连接，自动撤表回滚
-tproxy_verify_seconds: 25
+tproxy_verify_seconds: 5
+# mihomo rule-provider 目录：usbnicd 维护 usbnic-proxy.yaml，留空表示不启用
+clash_ruleset_dir: /path/to/clash-verge/ruleset
 
 # 设备级代理策略：默认直连；运行期设置写入 data_dir/device_policies.json
 tproxy_default_policy: direct

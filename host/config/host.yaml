@@ -89,13 +89,16 @@ home_gateway: 192.168.1.1
 # Clash 透明代理端口（TPROXY 保留下游真实源 IP）
 clash_tproxy_port: 7896
 clash_redir_port: 7895
+# mihomo 的 rule-provider 目录：usbnicd 在这里维护 usbnic-proxy.yaml，
+# 让走代理的下游设备排在 GEOIP,CN 之前全走代理；留空表示不启用。
+clash_ruleset_dir: /home/xzh-wuyan/.local/share/io.github.clash-verge-rev.clash-verge-rev/usbnic-rules
 
 # TPROXY 永不接管的源地址（按 IP 兜底）。设备级策略已能按 MAC 精确控制，
 # 这里只留给"MAC 未知/会变"的设备；整段直连写 10.10.10.0/24。
 tproxy_exclude_ips: []
 # 装表后的观察窗口（秒）：窗口内规则未命中且下游有流量，就自动撤表回滚
 # 设为 0 关闭该校验
-tproxy_verify_seconds: 25
+tproxy_verify_seconds: 5
 
 # ---------- 设备级代理管控（按 MAC 决定谁走代理、谁直连） ----------
 # 全局默认策略：direct 表示不改变现有行为；proxy 表示没单独设置的设备默认走代理。

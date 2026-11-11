@@ -12,7 +12,7 @@ from ..config import Config
 from ..exec import run
 from ..util import read_text
 from .clash import ensure_clash
-from . import device_policy
+from . import device_policy, rule_provider
 
 # nftables 表名与 TPROXY 策略路由表号，统一前缀便于精确清理
 NFT_TABLE = "usbnic"
@@ -474,6 +474,8 @@ def _wait_ipv4_listener(config: Config, timeout: float = 3.0) -> dict[str, Any]:
 
 
 def cleanup_tproxy(config: Config, clear_port: bool = False) -> None:
+    # 先让下游规则失效：否则表撤了、provider 还留着 10.x -> PROXY 的源地址规则
+    rule_provider.sync(config, [])
     _delete_table()
     # 新规则显式指定 pref；旧版本装的规则没有 pref，两条删除都执行一次
     run(["ip", "rule", "del", "pref", TPROXY_RULE_PREF], timeout=3.0)
@@ -576,10 +578,12 @@ def verify_tproxy(config: Config, prev_tun: bool) -> dict[str, Any]:
         return {"ok": True, "detail": "未启用校验"}
     lan_before = _lan_bytes(config)
     deadline = time.monotonic() + window
-    while time.monotonic() < deadline:
-        time.sleep(2.0)
+    while True:
         if _downstream_connections(config) > 0:
             return {"ok": True, "detail": "mihomo 已看到下游连接"}
+        if time.monotonic() >= deadline:
+            break
+        time.sleep(1.0)
     lan_delta = _lan_bytes(config) - lan_before
     if lan_delta > 256 * 1024:
         _rollback_tproxy(config, prev_tun)
@@ -784,6 +788,24 @@ def enable_tproxy(
         _rollback_tproxy(config, prev_tun)
         return {"ok": False, "error": err.strip(), "steps": steps}
 
+    # 5.5) 下游强制走代理：把这些设备的源 IP 写进 mihomo 的 usbnic-proxy
+    #      provider，规则链最前面的 RULE-SET 会让它们绕过 GEOIP,CN,DIRECT。
+    provider = rule_provider.sync(config, proxy_nets)
+    steps.append(
+        {
+            "name": "rule-provider",
+            "ok": bool(provider.get("ok")),
+            "detail": str(provider.get("detail") or ""),
+        }
+    )
+    if not provider.get("ok"):
+        _rollback_tproxy(config, prev_tun)
+        return {
+            "ok": False,
+            "error": f"下发 usbnic-proxy 规则失败：{provider.get('detail')}",
+            "steps": steps,
+        }
+
     # 6) 安全窗口：确认规则真的接住了下游流量，否则立刻撤表回滚
     verdict = verify_tproxy(config, prev_tun)
     steps.append(
@@ -833,6 +855,9 @@ def refresh_proxy_set(config: Config) -> dict[str, Any]:
     rc, _out, err = run(
         ["nft", "-f", "-"], timeout=5.0, input_text="\n".join(lines) + "\n"
     )
+    if rc == 0:
+        # DHCP 换 IP 后 provider 里的源地址也要跟着换，否则设备会被 CN 规则直连
+        rule_provider.sync(config, proxy_ips)
     return {
         "ok": rc == 0,
         "updated": rc == 0,

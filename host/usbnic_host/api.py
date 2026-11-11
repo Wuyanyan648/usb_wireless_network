@@ -84,13 +84,20 @@ TPROXY_MODES = ("gateway", "router", "hotspot", "tun")
 def _install_tproxy_if_needed(config: Config, monitor: Monitor) -> dict:
     """设备改成走代理后按需装表，避免"设了策略却什么都没发生"。"""
     if tproxy_installed():
-        return {"ok": True, "installed": True, "detail": "已在接管中"}
-    mode = str(monitor.snapshot().get("mode") or "client")
+        return {"ok": True, "installed": True, "detail": "已在接管中", "steps": []}
+    # 用持久记录的模式判断，不用采集器快照（有约 2 秒延迟，刚切模式时会误判）
+    saved = state.load(config.data_dir) or {}
+    mode = str(saved.get("mode") or monitor.snapshot().get("mode") or "client")
     if mode not in TPROXY_MODES:
-        return {"ok": False, "installed": False, "detail": f"{mode} 模式不接管下游"}
+        return {"ok": False, "installed": False, "detail": f"{mode} 模式不接管下游", "steps": []}
     tun = bool((clash_get(config, "/configs").get("tun") or {}).get("enable"))
     if not tun:
-        return {"ok": False, "installed": False, "detail": "代理未开启，先打开代理再设置"}
+        return {
+            "ok": False,
+            "installed": False,
+            "detail": "代理未开启，先打开代理再设置",
+            "steps": [],
+        }
     result = enable_tproxy(config, mode=mode)
     return {
         "ok": bool(result.get("ok")),
@@ -98,6 +105,18 @@ def _install_tproxy_if_needed(config: Config, monitor: Monitor) -> dict:
         "detail": str(result.get("detail") or result.get("error") or ""),
         "steps": result.get("steps") or [],
     }
+
+
+def _install_error(install: dict) -> str:
+    """把装表结果里失败的那一步拼进提示，便于页面直接显示。"""
+    detail = str(install.get("detail") or "装表失败")
+    for step in install.get("steps") or []:
+        if step.get("ok"):
+            continue
+        name = str(step.get("name") or "step")
+        extra = str(step.get("detail") or step.get("error") or "").strip()
+        return f"{detail}（{name}: {extra}）" if extra else f"{detail}（{name}）"
+    return detail
 
 
 def create_app(monitor: Monitor, config: Config) -> FastAPI:
@@ -334,7 +353,21 @@ def create_app(monitor: Monitor, config: Config) -> FastAPI:
             return JSONResponse(status_code=400, content=result)
         # 代理已开启时，把设备改成"走代理"应当立刻装表，而不是等下一次代理开关
         if body.policy == "proxy":
-            result["install"] = _install_tproxy_if_needed(config, monitor)
+            install = _install_tproxy_if_needed(config, monitor)
+            result["install"] = install
+            if not install.get("ok"):
+                # 装表失败就把策略回滚，别让开关显示"走代理"而 effective 是直连
+                device_policy.set_device(config, body.mac, "direct")
+                refresh_proxy_set(config)
+                return JSONResponse(
+                    status_code=409,
+                    content={
+                        **device_policy.table(config),
+                        "ok": False,
+                        "error": _install_error(install),
+                        "install": install,
+                    },
+                )
         result["refresh"] = refresh_proxy_set(config)
         result.update(device_policy.table(config))
         return result

@@ -1128,7 +1128,10 @@ async function setDevicePolicy(mac, policy) {
       body: JSON.stringify({ mac, policy }),
     });
     const data = await response.json();
-    if (!data.ok) throw new Error(data.error || "设置失败");
+    // 装表失败时后端会把策略回滚成直连，并返回失败的那一步（install.steps）
+    if (!response.ok || !data.ok) {
+      throw new Error(data.error || data.install?.detail || "设置失败");
+    }
     state.devicePolicies = data;
   } catch (error) {
     alert(`设备代理策略设置失败: ${error.message}`);
