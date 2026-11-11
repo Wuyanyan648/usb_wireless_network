@@ -62,6 +62,24 @@ home_gateway: 192.168.1.1
 clash_tproxy_port: 7896
 clash_redir_port: 7895
 
+# 宽带测速：多线程直连国内镜像，不用 Clash 代理
+# 下载端点可以是任意大文件；测速时用 Range 分片并发拉取
+speedtest_downloads:
+  - https://mirrors.aliyun.com/ubuntu/ls-lR.gz
+  - https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ls-lR.gz
+  - https://mirrors.cloud.tencent.com/ubuntu/ls-lR.gz
+# 上传端点：需要能接收 POST 大 body（测速进程会绑定上行网卡直连）
+speedtest_upload_url: https://speed.cloudflare.com/__up
+# 直连 DNS（绑定上行网卡查询，绕开 Clash fake-IP）
+speedtest_dns:
+  - 223.5.5.5
+  - 119.29.29.29
+# 延迟 / 抖动探测目标
+speedtest_latency_target: mirrors.aliyun.com
+# 下行测试时长（秒）与流量上限（MB）
+speedtest_duration: 6.0
+speedtest_max_mb: 350
+
 # 设备别名：MAC -> 显示名称。MAC 必须是当前实际地址。
 # 手机/iPad 如果重新开启“私有 Wi-Fi 地址”，MAC 会变化，需要同步更新。
 device_aliases:

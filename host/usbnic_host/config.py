@@ -46,6 +46,21 @@ class Config:
     hotspot_password_file: str = "/etc/usbnic/hotspot.pass"
     # 家庭网关开机判定：上游默认网关必须是这个地址（留空则只看网卡载波）
     home_gateway: str = ""
+    # 宽带测速：多线程直连国内镜像，上传端点需能接收 POST
+    speedtest_downloads: list[str] = field(
+        default_factory=lambda: [
+            "https://mirrors.aliyun.com/ubuntu/ls-lR.gz",
+            "https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ls-lR.gz",
+            "https://mirrors.cloud.tencent.com/ubuntu/ls-lR.gz",
+        ]
+    )
+    speedtest_upload_url: str = "https://speed.cloudflare.com/__up"
+    speedtest_dns: list[str] = field(
+        default_factory=lambda: ["223.5.5.5", "119.29.29.29"]
+    )
+    speedtest_latency_target: str = "mirrors.aliyun.com"
+    speedtest_duration: float = 6.0
+    speedtest_max_mb: int = 350
     clash_tproxy_port: int = 7896
     clash_redir_port: int = 7895
 
@@ -101,6 +116,33 @@ class Config:
                 or "/etc/usbnic/hotspot.pass"
             ),
             home_gateway=str(raw.get("home_gateway", "") or ""),
+            speedtest_downloads=[
+                str(item)
+                for item in (
+                    raw.get("speedtest_downloads")
+                    or [
+                        "https://mirrors.aliyun.com/ubuntu/ls-lR.gz",
+                        "https://mirrors.tuna.tsinghua.edu.cn/ubuntu/ls-lR.gz",
+                        "https://mirrors.cloud.tencent.com/ubuntu/ls-lR.gz",
+                    ]
+                )
+                if str(item).strip()
+            ],
+            speedtest_upload_url=str(
+                raw.get("speedtest_upload_url", "https://speed.cloudflare.com/__up")
+                or "https://speed.cloudflare.com/__up"
+            ),
+            speedtest_dns=[
+                str(item)
+                for item in (raw.get("speedtest_dns") or ["223.5.5.5", "119.29.29.29"])
+                if str(item).strip()
+            ],
+            speedtest_latency_target=str(
+                raw.get("speedtest_latency_target", "mirrors.aliyun.com")
+                or "mirrors.aliyun.com"
+            ),
+            speedtest_duration=float(raw.get("speedtest_duration", 6.0)),
+            speedtest_max_mb=int(raw.get("speedtest_max_mb", 350)),
             clash_tproxy_port=int(raw.get("clash_tproxy_port", 7896)),
             clash_redir_port=int(raw.get("clash_redir_port", 7895)),
         )

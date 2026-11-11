@@ -1177,3 +1177,329 @@ button.proxy-node:disabled {
     transition-duration: 0.01ms !important;
   }
 }
+
+/* ---------- 宽带测速 ---------- */
+.speedtest-panel .card-head > div:first-child {
+  min-width: 0;
+}
+
+.speedtest-panel #speedtestMeta {
+  display: block;
+  margin-top: 4px;
+  white-space: normal;
+}
+
+.primary-btn {
+  padding: 7px 16px;
+  border: 1px solid var(--accent);
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: opacity 120ms ease, transform 120ms ease, background 120ms ease;
+}
+
+.primary-btn:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.primary-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.primary-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
+.primary-btn.pending {
+  background: color-mix(in srgb, var(--accent) 24%, var(--panel));
+  color: var(--accent);
+}
+
+.speed-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.speed-badge.direct {
+  color: var(--green);
+  border-color: color-mix(in srgb, var(--green) 38%, var(--border));
+  background: color-mix(in srgb, var(--green) 10%, var(--panel));
+}
+
+.speed-badge.proxy {
+  color: var(--yellow);
+  border-color: color-mix(in srgb, var(--yellow) 38%, var(--border));
+  background: color-mix(in srgb, var(--yellow) 10%, var(--panel));
+}
+
+.speedtest-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.3fr) minmax(300px, 0.7fr);
+  gap: 22px;
+}
+
+.speedtest-main {
+  min-width: 0;
+}
+
+.speed-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.speed-metric {
+  padding: 12px 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+}
+
+.speed-metric > span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.speed-metric strong {
+  font-family: var(--mono);
+  font-size: 25px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.5px;
+}
+
+.speed-metric em {
+  margin-left: 5px;
+  color: var(--faint);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.speed-metric.down strong {
+  color: var(--rx);
+}
+
+.speed-metric.up strong {
+  color: var(--tx);
+}
+
+.speed-status {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.speed-status #speedtestPhase {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.speed-status .hint {
+  white-space: normal;
+  text-align: right;
+}
+
+.speed-progress {
+  height: 4px;
+  margin-top: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--border-soft);
+}
+
+.speed-progress i {
+  display: block;
+  width: 0;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--rx), var(--tx));
+  transition: width 200ms ease;
+}
+
+.speed-msg {
+  margin-top: 10px;
+  padding: 8px 11px;
+  border: 1px solid color-mix(in srgb, var(--red) 42%, var(--border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--red) 10%, transparent);
+  color: var(--red);
+  font-size: 12px;
+}
+
+.speed-chart-wrap {
+  height: 210px;
+  margin-top: 12px;
+}
+
+.speed-trend-wrap {
+  height: 92px;
+  min-height: 92px;
+  margin-bottom: 10px;
+}
+
+.speedtest-side {
+  min-width: 0;
+  padding-left: 22px;
+  border-left: 1px solid var(--border-soft);
+}
+
+.speed-history-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+
+.speed-history-head h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.speed-history-list {
+  display: flex;
+  max-height: 258px;
+  overflow: auto;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.speed-history-item {
+  padding: 8px 10px;
+  border: 1px solid var(--border-soft);
+  border-radius: 9px;
+  background: var(--panel-2);
+  font-size: 12px;
+}
+
+.speed-history-item.failed {
+  border-color: color-mix(in srgb, var(--red) 34%, var(--border));
+}
+
+.speed-history-headline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.speed-history-time {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.speed-history-values {
+  margin-top: 3px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.speed-history-detail {
+  margin-top: 2px;
+  overflow: hidden;
+  color: var(--faint);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 1180px) {
+  .speedtest-body {
+    grid-template-columns: 1fr;
+  }
+
+  .speedtest-side {
+    padding-top: 14px;
+    padding-left: 0;
+    border-top: 1px solid var(--border-soft);
+    border-left: 0;
+  }
+}
+
+@media (max-width: 760px) {
+  .speed-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* ---------- 网口实时吞吐 ---------- */
+.throughput-metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.speed-metric.wide strong {
+  font-size: 15px;
+  letter-spacing: 0;
+  white-space: nowrap;
+}
+
+.throughput-chart-wrap {
+  height: 190px;
+  margin-top: 14px;
+}
+
+.inline-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.inline-field select {
+  padding: 5px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+}
+
+.inline-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.inline-check input {
+  accent-color: var(--accent);
+}
+
+#throughputState {
+  white-space: nowrap;
+}
+
+@media (max-width: 760px) {
+  .throughput-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+

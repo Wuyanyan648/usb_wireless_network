@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>usbnic 上位机 · 网络控制</title>
-  <link rel="stylesheet" href="/static/style.css">
+  <link rel="stylesheet" href="/static/style.css?v=20261111">
 </head>
 <body>
   <div class="app">
@@ -90,6 +90,104 @@
         </div>
       </section>
     </div>
+
+    <section class="card speedtest-panel">
+      <div class="card-head">
+        <div>
+          <h2>宽带测速</h2>
+          <span class="hint" id="speedtestMeta">多线程直连国内镜像，绑定上行网卡，绕开 Clash</span>
+        </div>
+        <div class="table-tools">
+          <span class="speed-badge" id="speedtestEgress">直连</span>
+          <button class="primary-btn" id="speedtestStart" type="button">开始测速</button>
+        </div>
+      </div>
+      <div class="speedtest-body">
+        <div class="speedtest-main">
+          <div class="speed-metrics">
+            <div class="speed-metric down">
+              <span>下行</span>
+              <div><strong id="speedDown">—</strong><em>Mbps</em></div>
+            </div>
+            <div class="speed-metric up">
+              <span>上行</span>
+              <div><strong id="speedUp">—</strong><em>Mbps</em></div>
+            </div>
+            <div class="speed-metric">
+              <span>延迟</span>
+              <div><strong id="speedLatency">—</strong><em>ms</em></div>
+            </div>
+            <div class="speed-metric">
+              <span>抖动</span>
+              <div><strong id="speedJitter">—</strong><em>ms</em></div>
+            </div>
+          </div>
+          <div class="speed-status">
+            <span id="speedtestPhase">待测速</span>
+            <span class="hint" id="speedtestEndpoint"></span>
+          </div>
+          <div class="speed-progress"><i id="speedtestProgress"></i></div>
+          <div class="speed-msg" id="speedtestError" hidden></div>
+          <div class="chart-wrap speed-chart-wrap"><canvas id="speedChart"></canvas></div>
+          <div class="chart-foot">
+            <span id="speedtestChartFoot">测速开始后显示实时采样</span>
+            <span id="speedtestLive"></span>
+          </div>
+        </div>
+        <div class="speedtest-side">
+          <div class="speed-history-head">
+            <h3>最近结果</h3>
+            <span class="hint" id="speedtestHistoryMeta">--</span>
+          </div>
+          <div class="chart-wrap speed-trend-wrap"><canvas id="speedTrend"></canvas></div>
+          <div class="speed-history-list" id="speedtestHistory">
+            <div class="empty-small">还没有测速记录</div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card throughput-panel">
+      <div class="card-head">
+        <div>
+          <h2>实时吞吐监控</h2>
+          <span class="hint">网口层总吞吐，每秒采样 · 最近 60 秒</span>
+        </div>
+        <div class="table-tools">
+          <label class="inline-field">
+            <span>接口</span>
+            <select id="throughputIface"></select>
+          </label>
+          <label class="inline-check">
+            <input type="checkbox" id="throughputKeep" />
+            <span>保持后台记录</span>
+          </label>
+        </div>
+      </div>
+      <div class="throughput-metrics">
+        <div class="speed-metric down">
+          <span>当前下行</span>
+          <div><strong id="throughputDown">—</strong><em>Mbps</em></div>
+        </div>
+        <div class="speed-metric up">
+          <span>当前上行</span>
+          <div><strong id="throughputUp">—</strong><em>Mbps</em></div>
+        </div>
+        <div class="speed-metric wide">
+          <span>60 秒均值</span>
+          <div><strong id="throughputAvg">—</strong></div>
+        </div>
+        <div class="speed-metric wide">
+          <span>60 秒峰值</span>
+          <div><strong id="throughputPeak">—</strong></div>
+        </div>
+      </div>
+      <div class="chart-wrap throughput-chart-wrap"><canvas id="throughputChart"></canvas></div>
+      <div class="chart-foot">
+        <span id="throughputNote">网口层吞吐（NIC），包含 NAT、代理转发、本地互传的全部流量，不是单个设备的速度</span>
+        <span id="throughputState">--</span>
+      </div>
+    </section>
 
     <section class="card proxy-panel">
       <div class="card-head">
@@ -215,6 +313,6 @@
     </footer>
   </div>
 
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=20261111"></script>
 </body>
 </html>

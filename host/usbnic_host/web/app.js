@@ -20,6 +20,17 @@ const state = {
   hotspot: null,
   hotspotReveal: false,
   hotspotPassword: "",
+  speedtest: null,
+  speedtestBusy: false,
+  speedtestTimer: null,
+  speedtestChart: null,
+  speedtestTrend: null,
+  speedtestNoticeUntil: 0,
+  throughput: null,
+  throughputIface: "",
+  throughputTimer: null,
+  throughputChart: null,
+  throughputSignatures: "",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -1130,6 +1141,658 @@ function niceNumber(value) {
   return niceFraction * 10 ** exponent;
 }
 
+// ---------- 宽带测速 ----------
+const SPEEDTEST_POLL_ACTIVE = 500;
+const SPEEDTEST_POLL_IDLE = 5000;
+
+function fmtNum(value, digits = 1) {
+  if (value === null || value === undefined || Number.isNaN(Number(value))) return "—";
+  return Number(value).toFixed(digits);
+}
+
+function speedtestBadge(result) {
+  const badge = $("speedtestEgress");
+  if (!badge) return;
+  const direct = !result || result.direct !== false;
+  badge.textContent = direct ? "直连" : "经代理";
+  badge.className = `speed-badge ${direct ? "direct" : "proxy"}`;
+}
+
+function clearSpeedtestError(force = false) {
+  const node = $("speedtestError");
+  if (!node) return;
+  if (!force && state.speedtestNoticeUntil && Date.now() < state.speedtestNoticeUntil) return;
+  state.speedtestNoticeUntil = 0;
+  node.hidden = true;
+  node.textContent = "";
+}
+
+function showSpeedtestError(message, holdMs = 6000) {
+  const node = $("speedtestError");
+  if (!node) return;
+  state.speedtestNoticeUntil = Date.now() + holdMs;
+  node.hidden = false;
+  node.textContent = message;
+}
+
+function updateSpeedtestButton() {
+  const button = $("speedtestStart");
+  if (!button) return;
+  const running = !!(state.speedtest && state.speedtest.running);
+  button.disabled = false;
+  button.classList.toggle("pending", running);
+  button.textContent = running ? "测速中…" : state.speedtest && state.speedtest.result ? "重新测速" : "开始测速";
+  button.title = running ? "已有测速任务在运行" : "开始下行 / 上行 / 延迟测试";
+}
+
+function renderSpeedtest(data) {
+  const running = !!data.running;
+  const result = data.result || null;
+  updateSpeedtestButton();
+  speedtestBadge(result);
+
+  const down =
+    result && result.down_mbps !== null && result.down_mbps !== undefined
+      ? result.down_mbps
+      : data.live && data.live.down_mbps;
+  const up =
+    result && result.up_mbps !== null && result.up_mbps !== undefined
+      ? result.up_mbps
+      : data.live && data.live.up_mbps;
+  setText("speedDown", down === null || down === undefined ? "—" : fmtNum(down));
+  setText("speedUp", up === null || up === undefined ? "—" : fmtNum(up));
+  setText("speedLatency", result ? fmtNum(result.latency_ms) : "—");
+  setText("speedJitter", result ? fmtNum(result.jitter_ms) : "—");
+
+  const phaseLabel = data.phase_label || (running ? "测速中" : "待测速");
+  setText("speedtestPhase", running ? `${phaseLabel}…` : phaseLabel);
+  const progress = $("speedtestProgress");
+  if (progress) progress.style.width = `${Math.max(0, Math.min(100, Number(data.progress) || 0))}%`;
+
+  if (data.error) {
+    showSpeedtestError(data.error);
+  } else {
+    clearSpeedtestError();
+  }
+
+  let meta = "多线程直连国内镜像，绑定上行网卡，绕开 Clash";
+  if (running && result === null) {
+    meta = data.phase === "latency" ? "正在直连探测延迟与抖动" : "测速进行中，接口仍可正常响应";
+  } else if (result) {
+    const parts = [];
+    if (result.iface) parts.push(result.iface);
+    if (result.direct) parts.push("直连");
+    if (result.proxy_active) parts.push("Clash 已开启，本次已绕过");
+    if (result.duration_s) parts.push(`耗时 ${result.duration_s}s`);
+    if (result.notes) parts.push(result.notes);
+    meta = parts.join(" · ");
+  }
+  setText("speedtestMeta", meta);
+
+  const endpoint = $("speedtestEndpoint");
+  if (endpoint) {
+    const hosts = result && result.download_endpoints ? result.download_endpoints : [];
+    endpoint.textContent = hosts.length ? `下载端点：${hosts.join(" / ")}` : "";
+  }
+
+  const foot = $("speedtestChartFoot");
+  if (foot) {
+    foot.textContent = running
+      ? "实时采样：每 0.25s 一个点 · 绿色为下载，紫色为上传"
+      : result
+        ? "本轮下行 / 上行采样曲线"
+        : "测速开始后显示实时采样";
+  }
+  const live = $("speedtestLive");
+  if (live) {
+    if (running && data.live) {
+      const current = data.live.down_mbps ?? data.live.up_mbps;
+      live.textContent = current === null || current === undefined ? "" : `当前 ${fmtNum(current)} Mbps`;
+    } else {
+      live.textContent = "";
+    }
+  }
+
+  if (state.speedtestChart) {
+    state.speedtestChart.setSamples(data.samples || [], running, data.phase);
+  }
+  renderSpeedtestHistory(data.recent || []);
+}
+
+function renderSpeedtestHistory(items) {
+  const list = $("speedtestHistory");
+  const meta = $("speedtestHistoryMeta");
+  if (!list) return;
+  list.replaceChildren();
+  const valid = items.filter((item) => item && item.ok !== false && item.down_mbps !== null);
+  if (meta) meta.textContent = items.length ? `${items.length} 条` : "--";
+  if (state.speedtestTrend) state.speedtestTrend.setHistory(valid);
+  if (!items.length) {
+    list.append(el("div", "empty-small", "还没有测速记录"));
+    return;
+  }
+  items.slice(0, 8).forEach((item) => {
+    const row = el("div", `speed-history-item${item.ok === false ? " failed" : ""}`);
+    const head = el("div", "speed-history-headline");
+    head.append(el("span", "speed-history-time", item.time ? item.time.slice(5) : "--"));
+    const badge = el("span", `speed-badge ${item.direct === false ? "proxy" : "direct"}`, item.direct === false ? "经代理" : "直连");
+    head.append(badge);
+    row.append(head);
+    if (item.ok === false) {
+      row.append(el("div", "speed-history-values", item.error || "测速失败"));
+    } else {
+      row.append(
+        el(
+          "div",
+          "speed-history-values",
+          `↓ ${fmtNum(item.down_mbps)} · ↑ ${fmtNum(item.up_mbps)} Mbps`
+        )
+      );
+      const detail = [];
+      if (item.latency_ms !== null && item.latency_ms !== undefined) detail.push(`${fmtNum(item.latency_ms)} ms`);
+      if (item.jitter_ms !== null && item.jitter_ms !== undefined) detail.push(`抖动 ${fmtNum(item.jitter_ms)}`);
+      if (item.iface) detail.push(item.iface);
+      if (item.duration_s) detail.push(`${item.duration_s}s`);
+      row.append(el("div", "speed-history-detail", detail.join(" · ")));
+    }
+    list.append(row);
+  });
+}
+
+async function startSpeedtest() {
+  if (state.speedtestBusy) {
+    showSpeedtestError("正在启动测速，请稍候…");
+    return;
+  }
+  state.speedtestBusy = true;
+  updateSpeedtestButton();
+  clearSpeedtestError(true);
+  try {
+    // 不依赖本地 running 状态：由后端统一判定是否已有任务，409 时把原因显示出来
+    const response = await fetch("/api/speedtest/start", { method: "POST", cache: "no-store" });
+    const data = await response.json();
+    if (!response.ok || !data.ok) {
+      showSpeedtestError(data.error || `启动失败（HTTP ${response.status}）`, 8000);
+    } else {
+      await refreshSpeedtest();
+    }
+  } catch (error) {
+    showSpeedtestError(`启动测速失败：${error.message}`);
+  } finally {
+    state.speedtestBusy = false;
+    updateSpeedtestButton();
+  }
+}
+
+function scheduleSpeedtestPoll(delay) {
+  if (state.speedtestTimer) clearTimeout(state.speedtestTimer);
+  state.speedtestTimer = setTimeout(refreshSpeedtest, delay);
+}
+
+async function refreshSpeedtest() {
+  try {
+    const data = await fetchJSON("/api/speedtest/status");
+    state.speedtest = data;
+    renderSpeedtest(data);
+    scheduleSpeedtestPoll(data.running ? SPEEDTEST_POLL_ACTIVE : SPEEDTEST_POLL_IDLE);
+  } catch (error) {
+    scheduleSpeedtestPoll(SPEEDTEST_POLL_IDLE);
+  }
+}
+
+class SpeedChart {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext("2d");
+    this.samples = [];
+    this.running = false;
+    this.phase = "idle";
+    this.width = 0;
+    this.height = 0;
+    this.resize = this.resize.bind(this);
+    window.addEventListener("resize", this.resize);
+    if (window.ResizeObserver) new ResizeObserver(this.resize).observe(canvas.parentElement);
+    this.resize();
+  }
+
+  setSamples(samples, running, phase) {
+    this.samples = samples || [];
+    this.running = !!running;
+    this.phase = phase || "idle";
+    this.draw();
+  }
+
+  resize() {
+    const parent = this.canvas.parentElement;
+    if (!parent) return;
+    const rect = parent.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    this.canvas.width = Math.max(1, Math.floor(rect.width * dpr));
+    this.canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+    this.canvas.style.width = `${rect.width}px`;
+    this.canvas.style.height = `${rect.height}px`;
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.width = rect.width;
+    this.height = rect.height;
+    this.draw();
+  }
+
+  draw() {
+    const ctx = this.ctx;
+    if (!ctx || !this.width || !this.height) return;
+    ctx.clearRect(0, 0, this.width, this.height);
+    const styles = getComputedStyle(document.documentElement);
+    const rxColor = styles.getPropertyValue("--rx").trim() || "#41d1c4";
+    const txColor = styles.getPropertyValue("--tx").trim() || "#8a6cff";
+    const gridColor = styles.getPropertyValue("--border-soft").trim() || "#1a2332";
+    const faint = styles.getPropertyValue("--faint").trim() || "#5d687b";
+    const muted = styles.getPropertyValue("--muted").trim() || "#8e99ad";
+
+    if (!this.samples.length) {
+      ctx.fillStyle = faint;
+      ctx.font = '12px "PingFang SC", system-ui, sans-serif';
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      const text =
+        this.phase === "latency" ? "正在测量延迟…" : this.running ? "等待采样…" : "等待测速";
+      ctx.fillText(text, this.width / 2, this.height / 2);
+      return;
+    }
+
+    const padding = { left: 62, right: 14, top: 24, bottom: 24 };
+    const plotWidth = Math.max(10, this.width - padding.left - padding.right);
+    const plotHeight = Math.max(10, this.height - padding.top - padding.bottom);
+    const maxT = Math.max(1, ...this.samples.map((item) => Number(item.t) || 0));
+    const maxMbps = Math.max(1, ...this.samples.map((item) => Number(item.mbps) || 0));
+    const niceMax = niceNumber(maxMbps);
+    const xFor = (t) => padding.left + (Math.min(maxT, Math.max(0, t)) / maxT) * plotWidth;
+    const yFor = (value) => padding.top + plotHeight * (1 - value / niceMax);
+
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = gridColor;
+    ctx.fillStyle = muted;
+    ctx.font = '11px "JetBrains Mono", ui-monospace, monospace';
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    for (let step = 0; step <= 3; step += 1) {
+      const value = (niceMax / 3) * step;
+      const y = yFor(value);
+      ctx.beginPath();
+      ctx.moveTo(padding.left, y);
+      ctx.lineTo(this.width - padding.right, y);
+      ctx.stroke();
+      ctx.fillText(fmtNum(value, 0), padding.left - 8, y);
+    }
+    ctx.fillStyle = faint;
+    ctx.font = '10px "JetBrains Mono", ui-monospace, monospace';
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText("Mbps", padding.left, 4);
+
+    let segment = [];
+    let phase = "";
+    const flush = () => {
+      if (!segment.length) return;
+      const color = phase === "upload" ? txColor : rxColor;
+      ctx.beginPath();
+      segment.forEach((item, index) => {
+        const x = xFor(item.t);
+        const y = yFor(item.mbps);
+        if (index === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
+      ctx.stroke();
+      if (phase !== "upload" && segment.length > 1) {
+        ctx.save();
+        ctx.globalAlpha = 0.09;
+        ctx.beginPath();
+        segment.forEach((item, index) => {
+          const x = xFor(item.t);
+          const y = yFor(item.mbps);
+          if (index === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+        ctx.lineTo(xFor(segment[segment.length - 1].t), padding.top + plotHeight);
+        ctx.lineTo(xFor(segment[0].t), padding.top + plotHeight);
+        ctx.closePath();
+        ctx.fillStyle = color;
+        ctx.fill();
+        ctx.restore();
+      }
+      const last = segment[segment.length - 1];
+      ctx.beginPath();
+      ctx.arc(xFor(last.t), yFor(last.mbps), 2.8, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+      segment = [];
+    };
+
+    this.samples.forEach((item) => {
+      if (item.phase !== phase) {
+        flush();
+        phase = item.phase;
+      }
+      segment.push(item);
+    });
+    flush();
+
+    ctx.fillStyle = muted;
+    ctx.font = '11px "JetBrains Mono", ui-monospace, monospace';
+    ctx.textBaseline = "top";
+    ctx.textAlign = "left";
+    ctx.fillText("0s", padding.left, this.height - 18);
+    ctx.textAlign = "right";
+    ctx.fillText(`${fmtNum(maxT)}s`, this.width - padding.right, this.height - 18);
+  }
+}
+
+class SpeedTrend {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext("2d");
+    this.items = [];
+    this.width = 0;
+    this.height = 0;
+    this.resize = this.resize.bind(this);
+    window.addEventListener("resize", this.resize);
+    if (window.ResizeObserver) new ResizeObserver(this.resize).observe(canvas.parentElement);
+    this.resize();
+  }
+
+  setHistory(items) {
+    this.items = (items || []).slice(0, 12).reverse();
+    this.draw();
+  }
+
+  resize() {
+    const parent = this.canvas.parentElement;
+    if (!parent) return;
+    const rect = parent.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    this.canvas.width = Math.max(1, Math.floor(rect.width * dpr));
+    this.canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+    this.canvas.style.width = `${rect.width}px`;
+    this.canvas.style.height = `${rect.height}px`;
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.width = rect.width;
+    this.height = rect.height;
+    this.draw();
+  }
+
+  draw() {
+    const ctx = this.ctx;
+    if (!ctx || !this.width || !this.height) return;
+    ctx.clearRect(0, 0, this.width, this.height);
+    const styles = getComputedStyle(document.documentElement);
+    const rxColor = styles.getPropertyValue("--rx").trim() || "#41d1c4";
+    const txColor = styles.getPropertyValue("--tx").trim() || "#8a6cff";
+    const gridColor = styles.getPropertyValue("--border-soft").trim() || "#1a2332";
+    const faint = styles.getPropertyValue("--faint").trim() || "#5d687b";
+    if (!this.items.length) {
+      ctx.fillStyle = faint;
+      ctx.font = '11px "PingFang SC", system-ui, sans-serif';
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("暂无趋势", this.width / 2, this.height / 2);
+      return;
+    }
+    const padding = { left: 8, right: 8, top: 10, bottom: 18 };
+    const plotWidth = Math.max(10, this.width - padding.left - padding.right);
+    const plotHeight = Math.max(10, this.height - padding.top - padding.bottom);
+    const maxValue = Math.max(
+      1,
+      ...this.items.map((item) => Math.max(Number(item.down_mbps) || 0, Number(item.up_mbps) || 0))
+    );
+    const niceMax = niceNumber(maxValue);
+    const xFor = (index) =>
+      this.items.length === 1
+        ? padding.left + plotWidth / 2
+        : padding.left + (index / (this.items.length - 1)) * plotWidth;
+    const yFor = (value) => padding.top + plotHeight * (1 - value / niceMax);
+    ctx.strokeStyle = gridColor;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padding.left, yFor(0));
+    ctx.lineTo(this.width - padding.right, yFor(0));
+    ctx.stroke();
+    const draw = (key, color) => {
+      ctx.beginPath();
+      this.items.forEach((item, index) => {
+        const x = xFor(index);
+        const y = yFor(Number(item[key]) || 0);
+        if (index === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.8;
+      ctx.lineJoin = "round";
+      ctx.stroke();
+      this.items.forEach((item, index) => {
+        ctx.beginPath();
+        ctx.arc(xFor(index), yFor(Number(item[key]) || 0), 2.2, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
+      });
+    };
+    draw("down_mbps", rxColor);
+    draw("up_mbps", txColor);
+  }
+}
+
+// ---------- 网口实时吞吐 ----------
+const THROUGHPUT_POLL_MS = 1000;
+
+function throughputPair(rx, tx) {
+  return `↓ ${fmtNum(rx)} · ↑ ${fmtNum(tx)}`;
+}
+
+function renderThroughput(data) {
+  state.throughput = data;
+  if (!state.throughputIface && data.iface) state.throughputIface = data.iface;
+
+  const select = $("throughputIface");
+  if (select) {
+    const options = data.interfaces || [];
+    const signature = options.map((item) => `${item.name}:${item.up ? 1 : 0}`).join(",");
+    if (signature !== state.throughputSignatures) {
+      state.throughputSignatures = signature;
+      select.replaceChildren();
+      options.forEach((item) => {
+        const option = el(
+          "option",
+          null,
+          `${item.name}${item.up ? "" : "（未启用）"}${item.default ? " · 默认" : ""}`
+        );
+        option.value = item.name;
+        select.append(option);
+      });
+    }
+    if (data.iface) select.value = data.iface;
+  }
+
+  const keep = $("throughputKeep");
+  if (keep && document.activeElement !== keep) keep.checked = !!data.keep;
+
+  setText("throughputDown", fmtNum(data.current && data.current.rx));
+  setText("throughputUp", fmtNum(data.current && data.current.tx));
+  setText(
+    "throughputAvg",
+    data.avg ? throughputPair(data.avg.rx, data.avg.tx) : "—"
+  );
+  setText(
+    "throughputPeak",
+    data.peak ? throughputPair(data.peak.rx, data.peak.tx) : "—"
+  );
+  setText("throughputNote", data.note || "网口层吞吐（NIC）");
+  setText(
+    "throughputState",
+    data.active
+      ? `采样中 · ${data.iface} · 1s / 点${data.keep ? " · 后台记录中" : ""}`
+      : "已暂停（保持页面打开会自动恢复）"
+  );
+
+  if (state.throughputChart) {
+    state.throughputChart.setData(data.samples || [], data.window_s || 60, data.active);
+  }
+}
+
+async function refreshThroughput() {
+  if (document.hidden) return;
+  try {
+    const query = state.throughputIface
+      ? `?iface=${encodeURIComponent(state.throughputIface)}`
+      : "";
+    const data = await fetchJSON(`/api/throughput${query}`);
+    if (!state.throughputIface) state.throughputIface = data.iface || "";
+    renderThroughput(data);
+  } catch (error) {
+    setText("throughputState", "监控读取失败");
+  }
+  if (state.throughputTimer) clearTimeout(state.throughputTimer);
+  state.throughputTimer = setTimeout(refreshThroughput, THROUGHPUT_POLL_MS);
+}
+
+async function toggleThroughputKeep(enabled) {
+  try {
+    await fetch("/api/throughput/keep", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    });
+  } catch (error) {
+    setText("throughputState", `后台记录设置失败：${error.message}`);
+  }
+  refreshThroughput();
+}
+
+class ThroughputChart {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext("2d");
+    this.samples = [];
+    this.window = 60;
+    this.active = false;
+    this.width = 0;
+    this.height = 0;
+    this.resize = this.resize.bind(this);
+    window.addEventListener("resize", this.resize);
+    if (window.ResizeObserver) new ResizeObserver(this.resize).observe(canvas.parentElement);
+    this.resize();
+  }
+
+  setData(samples, windowSeconds, active) {
+    this.samples = samples || [];
+    this.window = windowSeconds || 60;
+    this.active = !!active;
+    this.draw();
+  }
+
+  resize() {
+    const parent = this.canvas.parentElement;
+    if (!parent) return;
+    const rect = parent.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    this.canvas.width = Math.max(1, Math.floor(rect.width * dpr));
+    this.canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+    this.canvas.style.width = `${rect.width}px`;
+    this.canvas.style.height = `${rect.height}px`;
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.width = rect.width;
+    this.height = rect.height;
+    this.draw();
+  }
+
+  draw() {
+    const ctx = this.ctx;
+    if (!ctx || !this.width || !this.height) return;
+    ctx.clearRect(0, 0, this.width, this.height);
+    const styles = getComputedStyle(document.documentElement);
+    const rxColor = styles.getPropertyValue("--rx").trim() || "#41d1c4";
+    const txColor = styles.getPropertyValue("--tx").trim() || "#8a6cff";
+    const gridColor = styles.getPropertyValue("--border-soft").trim() || "#1a2332";
+    const faint = styles.getPropertyValue("--faint").trim() || "#5d687b";
+    const muted = styles.getPropertyValue("--muted").trim() || "#8e99ad";
+
+    if (!this.samples.length) {
+      ctx.fillStyle = faint;
+      ctx.font = '12px "PingFang SC", system-ui, sans-serif';
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText(this.active ? "等待采样…" : "打开页面后自动开始采样", this.width / 2, this.height / 2);
+      return;
+    }
+
+    const padding = { left: 62, right: 14, top: 24, bottom: 24 };
+    const plotWidth = Math.max(10, this.width - padding.left - padding.right);
+    const plotHeight = Math.max(10, this.height - padding.top - padding.bottom);
+    const end = this.samples[this.samples.length - 1].t;
+    const start = end - this.window;
+    const maxValue = Math.max(
+      1,
+      ...this.samples.map((item) => Math.max(Number(item.rx) || 0, Number(item.tx) || 0))
+    );
+    const niceMax = niceNumber(maxValue);
+    const xFor = (t) =>
+      padding.left + (Math.min(1, Math.max(0, (t - start) / this.window))) * plotWidth;
+    const yFor = (value) => padding.top + plotHeight * (1 - value / niceMax);
+
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = gridColor;
+    ctx.fillStyle = muted;
+    ctx.font = '11px "JetBrains Mono", ui-monospace, monospace';
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    for (let step = 0; step <= 3; step += 1) {
+      const value = (niceMax / 3) * step;
+      const y = yFor(value);
+      ctx.beginPath();
+      ctx.moveTo(padding.left, y);
+      ctx.lineTo(this.width - padding.right, y);
+      ctx.stroke();
+      ctx.fillText(fmtNum(value, 0), padding.left - 8, y);
+    }
+    ctx.fillStyle = faint;
+    ctx.font = '10px "JetBrains Mono", ui-monospace, monospace';
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+    ctx.fillText("Mbps", padding.left, 4);
+
+    const series = (key, color) => {
+      ctx.beginPath();
+      this.samples.forEach((item, index) => {
+        const x = xFor(item.t);
+        const y = yFor(Number(item[key]) || 0);
+        if (index === 0) ctx.moveTo(x, y);
+        else ctx.lineTo(x, y);
+      });
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
+      ctx.stroke();
+      const last = this.samples[this.samples.length - 1];
+      ctx.beginPath();
+      ctx.arc(xFor(last.t), yFor(Number(last[key]) || 0), 2.8, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+    };
+    series("rx", rxColor);
+    series("tx", txColor);
+
+    ctx.fillStyle = muted;
+    ctx.font = '11px "JetBrains Mono", ui-monospace, monospace';
+    ctx.textBaseline = "top";
+    ctx.textAlign = "left";
+    ctx.fillText("60s 前", padding.left, this.height - 18);
+    ctx.textAlign = "right";
+    ctx.fillText("现在", this.width - padding.right, this.height - 18);
+  }
+}
+
 async function toggleProxy() {
   const button = $("proxyToggle");
   if (!button || state.proxyBusy) return;
@@ -1180,6 +1843,23 @@ function bindFilters() {
 
 function init() {
   state.chart = new TrafficChart($("trafficChart"));
+  state.speedtestChart = new SpeedChart($("speedChart"));
+  state.speedtestTrend = new SpeedTrend($("speedTrend"));
+  state.throughputChart = new ThroughputChart($("throughputChart"));
+  const speedtestButton = $("speedtestStart");
+  if (speedtestButton) speedtestButton.addEventListener("click", startSpeedtest);
+  const throughputSelect = $("throughputIface");
+  if (throughputSelect) {
+    throughputSelect.addEventListener("change", () => {
+      state.throughputIface = throughputSelect.value;
+      if (state.throughputChart) state.throughputChart.setData([], 60, true);
+      refreshThroughput();
+    });
+  }
+  const throughputKeep = $("throughputKeep");
+  if (throughputKeep) {
+    throughputKeep.addEventListener("change", () => toggleThroughputKeep(throughputKeep.checked));
+  }
   bindFilters();
   const proxyButton = $("proxyToggle");
   if (proxyButton) proxyButton.addEventListener("click", toggleProxy);
@@ -1199,6 +1879,8 @@ function init() {
   refresh();
   refreshProxies();
   refreshHotspot();
+  refreshSpeedtest();
+  refreshThroughput();
   setInterval(refresh, POLL_MS);
   setInterval(refreshProxies, PROXY_POLL_MS);
   document.addEventListener("visibilitychange", () => {
@@ -1206,6 +1888,8 @@ function init() {
       refresh();
       refreshProxies();
       refreshHotspot();
+      refreshSpeedtest();
+      refreshThroughput();
     }
   });
 }

@@ -19,7 +19,9 @@ from .monitor.clash_proxies import (
 from .monitor.collector import Monitor
 from .monitor.hotspot import hotspot_info
 from .monitor.proxy import set_proxy
+from .monitor.throughput import ThroughputMonitor
 from .net.modes import MODES, MODE_PROXY, apply_mode
+from .net.speedtest import SpeedTestManager
 from . import state
 
 WEB_DIR = Path(__file__).parent / "web"
@@ -48,6 +50,10 @@ class ModeRequest(BaseModel):
     proxy: bool | None = None
 
 
+class KeepRequest(BaseModel):
+    enabled: bool = False
+
+
 def create_app(monitor: Monitor, config: Config) -> FastAPI:
     app = FastAPI(
         title="usbnic 上位机",
@@ -55,12 +61,17 @@ def create_app(monitor: Monitor, config: Config) -> FastAPI:
         docs_url=None,
         redoc_url=None,
     )
+    speedtest = SpeedTestManager(config, monitor)
+    throughput = ThroughputMonitor(config, monitor)
+    throughput.start()
 
     @app.middleware("http")
-    async def no_store_api(request, call_next):  # type: ignore[no-untyped-def]
+    async def no_store(request, call_next):  # type: ignore[no-untyped-def]
         response = await call_next(request)
-        if request.url.path.startswith("/api/"):
-            response.headers["Cache-Control"] = "no-store"
+        path = request.url.path
+        if path == "/" or path.startswith("/static/") or path.startswith("/api/"):
+            # 本地控制页与接口都实时变化，避免浏览器拿旧 JS / 旧数据
+            response.headers["Cache-Control"] = "no-store, max-age=0"
         return response
 
     app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
@@ -115,6 +126,30 @@ def create_app(monitor: Monitor, config: Config) -> FastAPI:
     @app.get("/api/events")
     def events(limit: int = Query(default=100, ge=1, le=500)) -> dict:
         return {"items": monitor.events(limit=limit)}
+
+    @app.post("/api/speedtest/start")
+    def speedtest_start() -> dict:
+        result = speedtest.start()
+        if not result["ok"]:
+            return JSONResponse(status_code=409, content=result)
+        return result
+
+    @app.get("/api/speedtest/status")
+    def speedtest_status() -> dict:
+        return {"ok": True, **speedtest.status()}
+
+    @app.get("/api/speedtest/history")
+    def speedtest_history(limit: int = Query(default=20, ge=1, le=50)) -> dict:
+        return {"items": speedtest.history(limit=limit)}
+
+    @app.get("/api/throughput")
+    def throughput_status(iface: str | None = Query(default=None)) -> dict:
+        return throughput.snapshot(iface)
+
+    @app.post("/api/throughput/keep")
+    def throughput_keep(request: KeepRequest) -> dict:
+        throughput.set_keep(request.enabled)
+        return {"ok": True, "keep": request.enabled}
 
     @app.get("/api/config")
     def public_config() -> dict:
