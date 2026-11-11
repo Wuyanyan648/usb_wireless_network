@@ -90,31 +90,14 @@
         </div>
       </section>
 
-      <section class="card" id="ifaceSection">
-      <div class="card-head">
-        <h2>接口</h2>
-        <span class="hint">速率按 2 秒采样计算</span>
-      </div>
-      <div class="table-wrap">
-        <table class="data-table" id="ifaceTable">
-          <thead>
-            <tr>
-              <th>接口</th>
-              <th>类型</th>
-              <th>状态</th>
-              <th>链路</th>
-              <th>IPv4</th>
-              <th>连接</th>
-              <th class="num">下行</th>
-              <th class="num">上行</th>
-              <th class="num">错误 / 丢包</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </section>
 
+      <section class="card">
+        <div class="card-head">
+          <h2>网络模式</h2>
+          <span class="hint" id="modeHint">切换后立即生效</span>
+        </div>
+        <div class="mode-list" id="modeList"></div>
+      </section>
       <section class="card" id="deviceSection">
         <div class="card-head">
           <h2>设备</h2>
@@ -150,6 +133,32 @@
         </div>
         <div class="empty" id="deviceEmpty" hidden>没有匹配的设备</div>
       </section>
+
+      <section class="card" id="ifaceSection">
+      <div class="card-head">
+        <h2>接口</h2>
+        <span class="hint">速率按 2 秒采样计算</span>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table" id="ifaceTable">
+          <thead>
+            <tr>
+              <th>接口</th>
+              <th>类型</th>
+              <th>状态</th>
+              <th>链路</th>
+              <th>IPv4</th>
+              <th>连接</th>
+              <th class="num">下行</th>
+              <th class="num">上行</th>
+              <th class="num">错误 / 丢包</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
 
     </div>
 
@@ -357,13 +366,6 @@
         </div>
       </section>
 
-      <section class="card">
-        <div class="card-head">
-          <h2>网络模式</h2>
-          <span class="hint" id="modeHint">切换后立即生效</span>
-        </div>
-        <div class="mode-list" id="modeList"></div>
-      </section>
     </div>
 
     <footer class="footer">
