@@ -495,6 +495,12 @@ def _downstream_networks(config: Config) -> list[ipaddress.IPv4Network]:
     return nets
 
 
+def connection_source(item: dict[str, Any]) -> str:
+    """mihomo /connections 的源地址在 metadata.sourceIP；兼容旧的 source_ip。"""
+    metadata = item.get("metadata") or {}
+    return str(metadata.get("sourceIP") or item.get("source_ip") or "")
+
+
 def _downstream_connections(config: Config) -> int:
     """统计 mihomo 里源地址属于下游网段的连接数。"""
     body = clash_get(config, "/connections")
@@ -502,7 +508,7 @@ def _downstream_connections(config: Config) -> int:
     count = 0
     for item in body.get("connections") or []:
         try:
-            address = ipaddress.ip_address(str(item.get("source_ip") or ""))
+            address = ipaddress.ip_address(connection_source(item))
         except ValueError:
             continue
         if any(address in network for network in nets):

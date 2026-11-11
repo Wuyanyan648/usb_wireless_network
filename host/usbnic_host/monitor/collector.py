@@ -274,7 +274,8 @@ class Monitor:
             return 0
         count = 0
         for connection in clash.get("connections") or []:
-            source = str(connection.get("source_ip") or "")
+            metadata = connection.get("metadata") or {}
+            source = str(metadata.get("sourceIP") or connection.get("source_ip") or "")
             try:
                 address = ipaddress.ip_address(source)
             except ValueError:
