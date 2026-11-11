@@ -907,25 +907,51 @@ function mergedDevices() {
     if ((item.ip && seen.has(item.ip)) || (item.mac && seen.has(item.mac))) continue;
     rows.push({ ...item });
   }
-  rows.sort((a, b) => {
-    const offlineA = a.online === false ? 1 : 0;
-    const offlineB = b.online === false ? 1 : 0;
-    if (offlineA !== offlineB) return offlineA - offlineB;
-    const rateA = (a.rx_rate_mbps || 0) + (a.tx_rate_mbps || 0);
-    const rateB = (b.rx_rate_mbps || 0) + (b.tx_rate_mbps || 0);
-    if (rateA !== rateB) return rateB - rateA;
-    return String(a.name || a.hostname || a.ip || "").localeCompare(
-      String(b.name || b.hostname || b.ip || "")
-    );
-  });
   return rows;
+}
+
+// 排序只看"稳定的身份与状态"：分组（本机 USB 口 > 普通设备 > 本机 TUN/VPN）、
+// 在线状态、IPv4 数值。速率、累计流量、名称、厂商一律不参与，避免每 2 秒换位。
+function ipv4SortKey(ip) {
+  const text = String(ip || "").trim();
+  const parts = text.split(".");
+  if (
+    parts.length === 4 &&
+    parts.every((part) => /^\d{1,3}$/.test(part) && Number(part) <= 255)
+  ) {
+    return parts.reduce((acc, part) => acc * 256 + Number(part), 0);
+  }
+  return Number.MAX_SAFE_INTEGER; // IPv6 / 无 IP 排在本组末尾
+}
+
+function isHostUsbRow(item) {
+  return Boolean(item.is_local) && /USB 网口/.test(String(item.name || ""));
+}
+
+function deviceSortGroup(item) {
+  if (isHostUsbRow(item)) return 0; // 本机（USB 网口）固定第一
+  if (item.is_local) return 2; // 本机 TUN / VPN 网口行排在所有设备之后
+  return 1;
+}
+
+function compareDevices(a, b) {
+  const groupDiff = deviceSortGroup(a) - deviceSortGroup(b);
+  if (groupDiff !== 0) return groupDiff;
+  const offlineA = a.online === false ? 1 : 0;
+  const offlineB = b.online === false ? 1 : 0;
+  if (offlineA !== offlineB) return offlineA - offlineB;
+  const keyA = ipv4SortKey(a.ip);
+  const keyB = ipv4SortKey(b.ip);
+  if (keyA !== keyB) return keyA - keyB;
+  // 没有 IP 时用 MAC 兜底，保证顺序仍然确定
+  return String(a.mac || "").localeCompare(String(b.mac || ""));
 }
 
 function renderDevices() {
   const tbody = $("deviceRateRows");
   const empty = $("deviceEmpty");
   if (!tbody) return;
-  const items = mergedDevices().filter(deviceMatches);
+  const items = mergedDevices().filter(deviceMatches).sort(compareDevices);
   if (!items.length) {
     tbody.replaceChildren();
     if (empty) empty.hidden = false;
