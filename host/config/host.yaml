@@ -133,6 +133,8 @@ device_aliases:
   "1e:38:01:58:ff:76": "iPad"
   # 当前有线活动的 Switch 2；被路由器桥接的旧无线接口会自行过期
   "40:44:f7:d8:99:c5": "Nintendo Switch 2"
+  # 上行光猫（Sichuan Tianyi Comheart / 天邑 TEWA）
+  "cc:a2:60:a2:94:70": "光猫（天邑 TEWA 天翼网关）"
 
 # ---------- 使用时长 / 系统健康（并入 usbnicd，不单独起服务） ----------
 # 关闭后不再采集前台窗口，但历史数据仍可查询

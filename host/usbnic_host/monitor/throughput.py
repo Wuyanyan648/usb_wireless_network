@@ -238,6 +238,32 @@ class ThroughputMonitor:
                 # 页面刚打开，先建立基线，下一秒开始有速率
                 self._device_prev = None
             items = [dict(item) for item in self._devices]
+        try:
+            ifaces = (self.monitor.snapshot().get("interfaces") or []) if self.monitor else []
+        except Exception:  # noqa: BLE001
+            ifaces = []
+        local_map: dict[str, dict[str, Any]] = {}
+        for iface in ifaces:
+            for cidr in list(iface.get("ipv4") or []) + list(iface.get("ipv6") or []):
+                local_map[str(cidr).split("/", 1)[0]] = iface
+        from .devices import _local_label
+
+        for item in items:
+            ip = str(item.get("ip") or "")
+            iface = local_map.get(ip)
+            if iface is not None or ip.startswith("198.18."):
+                item["is_local"] = True
+                item["name"] = _local_label(iface, ip)
+            elif ":" in ip and not item.get("mac"):
+                item["name"] = "仅 IPv6，无法识别厂商"
+                item["name_note"] = "该地址没有 MAC，无法查厂商或主机名"
+            elif item.get("mac") and not item.get("hostname"):
+                from .sources import is_local_mac
+
+                if is_local_mac(item["mac"]):
+                    item["name"] = "设备（随机 MAC）"
+                    item["mac_random"] = True
+                    item["name_note"] = "MAC 未在 IEEE 注册，且没有可用的主机名"
         items.sort(key=lambda item: (item.get("rx_rate", 0) + item.get("tx_rate", 0)), reverse=True)
         for item in items:
             item["rx_rate"] = round(float(item.get("rx_rate") or 0.0), 2)

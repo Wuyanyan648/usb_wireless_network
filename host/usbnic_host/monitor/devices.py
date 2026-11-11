@@ -1,12 +1,35 @@
 from __future__ import annotations
 
 import ipaddress
+import re
 import time
 from typing import Any
 
 from ..config import Config
 from ..util import ip_sort_key, normalize_mac
-from .sources import lookup_vendor, short_vendor
+from .sources import (
+    infer_vendor,
+    is_local_mac,
+    lookup_vendor,
+    resolve_hostname,
+    short_vendor,
+)
+
+HEXNAME_RE = re.compile(r"^[0-9a-f]{20,40}$", re.IGNORECASE)
+
+
+def _local_label(iface: dict[str, Any] | None, ip: str) -> str:
+    if ip.startswith("198.18."):
+        return "本机（TUN 网关）"
+    name = str((iface or {}).get("name") or "")
+    kind = str((iface or {}).get("type") or "")
+    if kind == "vpn":
+        return "本机（VPN 网口）"
+    if name.startswith("wl"):
+        return "本机（无线网口）"
+    if name.startswith(("en", "eth")):
+        return "本机（USB 网口）"
+    return "本机"
 
 
 def _iface_for_ip(interfaces: list[dict[str, Any]], ip: str) -> str:
@@ -205,28 +228,76 @@ def build_devices(
                 )
                 device["byte_source"] = "clash"
 
+    # 4.5) 没有 DHCP 主机名时，尝试 mDNS / NetBIOS 补名称（带缓存，每轮最多 3 个）
+    probes = 0
+    for device in devices.values():
+        if probes >= 3:
+            break
+        if device.get("hostname") or not device.get("online"):
+            continue
+        ip = device.get("ip") or ""
+        if not ip or ":" in ip or ip in local_ips:
+            continue
+        name, source = resolve_hostname(ip)
+        if name:
+            device["hostname"] = name
+            device["hostname_source"] = source
+            probes += 1
+
+    local_ifaces: dict[str, dict[str, Any]] = {}
+    for iface in interfaces:
+        for cidr in list(iface.get("ipv4") or []) + list(iface.get("ipv6") or []):
+            local_ifaces[str(cidr).split("/", 1)[0]] = iface
+
     # 5) 名称、厂商、代理链路
     for key, device in devices.items():
         mac = device.get("mac") or ""
+        ip = device.get("ip") or ""
         vendor_full = lookup_vendor(mac, config.oui_file) if mac else ""
-        vendor_short = short_vendor(vendor_full)
-        device["vendor"] = vendor_short
+        local_iface = local_ifaces.get(ip) if ip else None
+        device["is_local"] = bool(local_iface) or ip.startswith("198.18.")
+        mac_random = bool(mac) and is_local_mac(mac)
+        device["mac_random"] = mac_random
+
         hostname = (device.get("hostname") or "").strip()
-        if "nintendo" in vendor_full.lower():
-            device["name"] = "Nintendo Switch"
-        elif hostname and hostname != "*":
-            device["name"] = hostname
-        elif vendor_full:
-            device["name"] = f"{vendor_short} 设备"
-        elif device.get("is_router"):
-            device["name"] = "路由器 / 网关"
-        else:
-            device["name"] = "未知设备"
+        # 随机 MAC 查不到 OUI：先按主机名推断厂商（Apple/Android），再退到"随机 MAC"
+        vendor_source = ""
+        if not vendor_full and mac_random:
+            vendor_full, vendor_source = infer_vendor(hostname)
+        vendor_short = short_vendor(vendor_full) if vendor_full else ""
+        device["vendor"] = vendor_short or ("随机 MAC（私有地址）" if mac_random else "厂商未收录")
+        device["vendor_source"] = vendor_source
+        device["mac_note"] = "随机 MAC（私有地址）" if mac_random else ""
 
         alias = config.device_aliases.get(mac.lower()) if mac else ""
-        if alias:
-            device["name"] = alias
+        source = ""
+        if device["is_local"]:
+            name = _local_label(local_iface, ip)
+            source = "local"
+        elif alias:
+            name, source = alias, "alias"
             device["alias"] = alias
+        elif "nintendo" in vendor_full.lower():
+            name, source = "Nintendo Switch", "vendor"
+        elif hostname and HEXNAME_RE.match(hostname):
+            name, source = hostname, "self"
+            device["name_note"] = "设备自报名称（随机串）"
+        elif hostname and hostname != "*":
+            name, source = hostname, "hostname"
+        elif device.get("is_router"):
+            name, source = "路由器 / 网关", "router"
+        elif not mac and ":" in ip:
+            name, source = "仅 IPv6，无法识别厂商", "ipv6"
+            device["name_note"] = "该地址没有 MAC，无法查厂商或主机名"
+        elif vendor_short:
+            name, source = f"{vendor_short} 设备", "vendor"
+        elif mac_random:
+            name, source = "设备（随机 MAC）", "mac"
+            device["name_note"] = "MAC 未在 IEEE 注册，且没有可用的主机名"
+        else:
+            name, source = "设备（MAC 未收录）", "unknown"
+        device["name"] = name
+        device["name_source"] = source
 
         device["proxy_chains"] = sorted(chain_sets.get(key, set()))
         if not device.get("type"):

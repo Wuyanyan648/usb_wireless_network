@@ -3,6 +3,7 @@ from __future__ import annotations
 import glob
 import json
 import re
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -269,7 +270,128 @@ def lookup_vendor(mac: str, oui_file: str) -> str:
     prefix = normalized.replace(":", "")[:6]
     if prefix in OUI_OVERRIDES:
         return OUI_OVERRIDES[prefix]
-    return load_oui(oui_file).get(prefix, "")
+    table = load_oui(oui_file)
+    if not table:
+        # 配置路径不存在时退回常见的离线 OUI 库，不联网
+        for candidate in (
+            "/usr/share/ieee-data/oui.txt",
+            "/usr/share/misc/oui.txt",
+            "/var/lib/ieee-data/oui.txt",
+        ):
+            if candidate != oui_file:
+                table = load_oui(candidate)
+                if table:
+                    break
+    return table.get(prefix, "")
+
+
+def is_local_mac(mac: str) -> bool:
+    """本地管理地址（随机/私有 MAC）：首字节 bit1 = 1。"""
+    normalized = normalize_mac(mac)
+    if not normalized:
+        return False
+    try:
+        return bool(int(normalized.split(":", 1)[0], 16) & 0x02)
+    except ValueError:
+        return False
+
+
+APPLE_HOST_RE = re.compile(
+    r"iphone|ipad|ipod|macbook|imac|mac-?mini|mac-?pro|apple-?tv|homepod|airpods|apple",
+    re.IGNORECASE,
+)
+ANDROID_HOST_RE = re.compile(
+    r"android|galaxy|sm-[a-z0-9]|redmi|pixel|oneplus|honor|huawei-|mi-?[0-9]",
+    re.IGNORECASE,
+)
+
+_HOSTNAME_CACHE: dict[str, tuple[float, str, str]] = {}
+
+
+def infer_vendor(hostname: str) -> tuple[str, str]:
+    """随机 MAC 查不到 OUI 时，用主机名推断厂商。返回 (厂商, 来源)。"""
+    name = (hostname or "").strip()
+    if not name:
+        return "", ""
+    if APPLE_HOST_RE.search(name):
+        return "Apple Inc.", "hostname"
+    if ANDROID_HOST_RE.search(name):
+        return "Android", "hostname"
+    return "", ""
+
+
+def _mdns_name(ip: str, timeout: float) -> str:
+    """优先 avahi-resolve，其次 avahi 的 D-Bus ResolveAddress；未安装则跳过。"""
+    import shutil
+    import subprocess
+
+    binary = shutil.which("avahi-resolve")
+    if binary:
+        try:
+            out = subprocess.run([binary, "-a", ip], capture_output=True, text=True,
+                                 timeout=timeout).stdout.strip()
+            if out:
+                return out.split()[-1]
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return ""
+    if shutil.which("dbus-send"):
+        try:
+            out = subprocess.run(
+                ["dbus-send", "--system", "--print-reply",
+                 "--dest=org.freedesktop.Avahi", "/",
+                 "org.freedesktop.Avahi.Server.ResolveAddress",
+                 "int32:-1", "int32:0", "string:" + ip, "uint32:0"],
+                capture_output=True, text=True, timeout=timeout).stdout
+            for line in out.splitlines():
+                if 'string "' in line:
+                    value = line.split('string "', 1)[1].rstrip('"')
+                    if value and value != ip:
+                        return value
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return ""
+
+
+def _netbios_name(ip: str, timeout: float) -> str:
+    """nmblookup 存在时查 NetBIOS 名称（samba-common）；没有就跳过。"""
+    import shutil
+    import subprocess
+
+    binary = shutil.which("nmblookup")
+    if not binary:
+        return ""
+    try:
+        out = subprocess.run([binary, "-A", ip], capture_output=True, text=True,
+                             timeout=timeout).stdout
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    for line in out.splitlines():
+        if "<00>" in line and "GROUP" not in line.upper():
+            return line.split("<00>", 1)[0].strip()
+    return ""
+
+
+def resolve_hostname(ip: str, timeout: float = 0.8) -> tuple[str, str]:
+    """mDNS → NetBIOS 的主机名补充；结果缓存 5 分钟，失败缓存 1 分钟。"""
+    if not ip or ":" in ip:
+        return "", ""            # 只对 IPv4 做主动探测，IPv6 交给 NDP/租约
+    now = time.time()
+    cached = _HOSTNAME_CACHE.get(ip)
+    if cached and now < cached[0]:
+        return cached[1], cached[2]
+    name = ""
+    source = ""
+    mdns = _mdns_name(ip, timeout)
+    if mdns:
+        name, source = mdns, "mdns"
+    else:
+        nb = _netbios_name(ip, timeout)
+        if nb:
+            name, source = nb, "netbios"
+    ttl = 300.0 if name else 60.0
+    _HOSTNAME_CACHE[ip] = (now + ttl, name, source)
+    return name, source
 
 
 def short_vendor(org: str) -> str:

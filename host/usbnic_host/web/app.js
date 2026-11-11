@@ -954,12 +954,18 @@ function deviceRow(item) {
 
   const nameCell = el("td");
   const nameLine = el("div", "cell-main");
-  nameLine.appendChild(el("span", "cell-name", item.name || item.hostname || item.ip || "未知设备"));
+  nameLine.appendChild(el("span", "cell-name", item.name || item.hostname || item.ip || "设备"));
+  if (item.name_source === "self") {
+    nameLine.appendChild(el("span", "type-badge", "自报名称"));
+  } else if (item.is_local) {
+    nameLine.appendChild(el("span", "type-badge proxy", "本机"));
+  }
   if ((item.vendor || "").toLowerCase().includes("nintendo")) {
     nameLine.appendChild(el("span", "type-badge nintendo", "Nintendo"));
   } else if (item.vendor) {
     nameLine.appendChild(el("span", "type-badge", item.vendor));
   }
+  if (item.name_note) nameLine.title = item.name_note;
   nameCell.appendChild(nameLine);
   const sub = [];
   if (item.type) sub.push(typeLabel(item.type));
@@ -979,7 +985,10 @@ function deviceRow(item) {
 
   const idCell = el("td");
   idCell.appendChild(el("div", "mono", item.ip || "—"));
-  if (item.mac) idCell.appendChild(el("div", "cell-sub mono", item.mac));
+  if (item.mac) {
+    const macLine = item.mac + (item.mac_random ? " · 随机 MAC" : "");
+    idCell.appendChild(el("div", "cell-sub mono", macLine));
+  }
   row.appendChild(idCell);
 
   row.appendChild(el("td", "muted", item.interface || "—"));
