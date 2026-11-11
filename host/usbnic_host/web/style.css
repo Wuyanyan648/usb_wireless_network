@@ -364,40 +364,6 @@ input {
   border-bottom: none;
 }
 
-.device-name {
-  font-weight: 600;
-}
-
-.device-id {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.device-mac {
-  color: var(--faint);
-  font-size: 11px;
-}
-
-.device-rate {
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-
-.device-rate.down {
-  color: var(--rx, #3b82f6);
-}
-
-.device-rate.up {
-  color: var(--tx, #22c55e);
-}
-
-.device-total {
-  color: var(--faint);
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
-}
-
 .hint {
   color: var(--faint);
   font-size: 12px;
@@ -715,37 +681,73 @@ input {
   border-color: color-mix(in srgb, var(--red) 32%, var(--border));
 }
 
+.policy-col {
+  width: 88px;
+}
+
 .policy-cell {
   white-space: nowrap;
 }
 
-.policy-toggle {
+.policy-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 9px 2px 3px;
   border: 1px solid var(--border);
   border-radius: 999px;
-  padding: 3px 10px;
   background: var(--panel-2);
   color: var(--muted);
   font-size: 11px;
+  line-height: 1;
   cursor: pointer;
 }
 
-.policy-toggle:hover:not(:disabled) {
+.policy-switch:hover:not(:disabled) {
   color: var(--text);
 }
 
-.policy-toggle.proxy {
+.policy-switch .knob {
+  position: relative;
+  width: 28px;
+  height: 16px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 35%, transparent);
+  transition: background 0.15s ease;
+}
+
+.policy-switch .knob::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s ease;
+}
+
+.policy-switch.on {
   color: var(--tx);
   border-color: color-mix(in srgb, var(--tx) 42%, var(--border));
-  background: color-mix(in srgb, var(--tx) 12%, var(--panel-2));
 }
 
-.policy-toggle.direct {
-  color: var(--muted);
+.policy-switch.on .knob {
+  background: var(--tx);
 }
 
-.policy-toggle:disabled {
+.policy-switch.on .knob::after {
+  transform: translateX(12px);
+}
+
+.policy-switch:disabled {
   opacity: 0.55;
   cursor: default;
+}
+
+.policy-default {
+  margin-left: auto;
 }
 
 .chain-list {

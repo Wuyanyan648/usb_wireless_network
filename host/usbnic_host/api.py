@@ -18,7 +18,13 @@ from .monitor.clash_proxies import (
 )
 from .monitor.collector import Monitor
 from .monitor.hotspot import hotspot_info
-from .monitor.proxy import refresh_proxy_set, set_proxy
+from .monitor.proxy import (
+    clash_get,
+    enable_tproxy,
+    refresh_proxy_set,
+    set_proxy,
+    tproxy_installed,
+)
 from .monitor import device_policy
 from .monitor.throughput import ThroughputMonitor
 from .net.modes import MODES, MODE_PROXY, apply_mode
@@ -63,6 +69,29 @@ class DevicePolicyRequest(BaseModel):
 
 class DefaultPolicyRequest(BaseModel):
     policy: str
+
+
+# 这些模式下下游流量需要 TPROXY；client 模式只代理本机，不装表
+TPROXY_MODES = ("gateway", "router", "hotspot", "tun")
+
+
+def _install_tproxy_if_needed(config: Config, monitor: Monitor) -> dict:
+    """设备改成走代理后按需装表，避免"设了策略却什么都没发生"。"""
+    if tproxy_installed():
+        return {"ok": True, "installed": True, "detail": "已在接管中"}
+    mode = str(monitor.snapshot().get("mode") or "client")
+    if mode not in TPROXY_MODES:
+        return {"ok": False, "installed": False, "detail": f"{mode} 模式不接管下游"}
+    tun = bool((clash_get(config, "/configs").get("tun") or {}).get("enable"))
+    if not tun:
+        return {"ok": False, "installed": False, "detail": "代理未开启，先打开代理再设置"}
+    result = enable_tproxy(config, mode=mode)
+    return {
+        "ok": bool(result.get("ok")),
+        "installed": bool(result.get("ok")),
+        "detail": str(result.get("detail") or result.get("error") or ""),
+        "steps": result.get("steps") or [],
+    }
 
 
 def create_app(monitor: Monitor, config: Config) -> FastAPI:
@@ -271,6 +300,9 @@ def create_app(monitor: Monitor, config: Config) -> FastAPI:
         result = device_policy.set_device(config, body.mac, body.policy)
         if not result["ok"]:
             return JSONResponse(status_code=400, content=result)
+        # 代理已开启时，把设备改成"走代理"应当立刻装表，而不是等下一次代理开关
+        if body.policy == "proxy":
+            result["install"] = _install_tproxy_if_needed(config, monitor)
         result["refresh"] = refresh_proxy_set(config)
         result.update(device_policy.table(config))
         return result

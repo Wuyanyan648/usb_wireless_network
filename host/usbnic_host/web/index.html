@@ -146,28 +146,6 @@
         </div>
       </section>
 
-      <section class="card device-card">
-        <div class="card-head">
-          <h2>设备速率</h2>
-          <span class="hint" id="deviceMeta">按 IP 统计，含直连与代理</span>
-        </div>
-        <div class="device-table-wrap">
-          <table class="device-table">
-            <thead>
-              <tr>
-                <th>设备</th>
-                <th>IP / MAC</th>
-                <th>下行</th>
-                <th>上行</th>
-                <th>累计 ↓ / ↑</th>
-              </tr>
-            </thead>
-            <tbody id="deviceRateRows">
-              <tr><td colspan="5" class="empty-small">等待采样…</td></tr>
-            </tbody>
-          </table>
-        </div>
-      </section>
     </div>
 
     <section class="card speedtest-panel">
@@ -329,47 +307,43 @@
       </div>
     </section>
 
-    <section class="card">
-      <div class="card-head">
-        <h2>连接设备</h2>
-        <div class="table-tools">
-          <div class="segmented" id="policyDefault" title="没单独设置的设备使用这个默认策略">
-            <button data-policy="direct" type="button">默认直连</button>
-            <button data-policy="proxy" type="button">默认代理</button>
+      <section class="card" id="deviceSection">
+        <div class="card-head">
+          <h2>设备</h2>
+          <span class="hint" id="deviceMeta">在线状态、速率、流量与代理策略</span>
+          <div class="table-tools">
+            <div class="segmented policy-default" id="policyDefault" title="没单独设置的设备使用这个默认策略">
+              <button data-policy="direct" type="button">默认直连</button>
+              <button data-policy="proxy" type="button">默认代理</button>
+            </div>
+            <div class="segmented" id="deviceFilter">
+              <button data-filter="all" class="active" type="button">全部</button>
+              <button data-filter="online" type="button">在线</button>
+              <button data-filter="offline" type="button">离线</button>
+              <button data-filter="proxied" type="button">走代理</button>
+            </div>
+            <input id="deviceSearch" class="search" type="search" placeholder="搜索 IP / MAC / 名称" autocomplete="off">
           </div>
-          <div class="segmented" id="deviceFilter">
-            <button data-filter="all" class="active" type="button">全部</button>
-            <button data-filter="online" type="button">在线</button>
-            <button data-filter="wifi" type="button">Wi-Fi</button>
-            <button data-filter="wired" type="button">有线</button>
-            <button data-filter="proxied" type="button">走代理</button>
-          </div>
-          <input id="deviceSearch" class="search" type="search" placeholder="搜索 IP / MAC / 名称" autocomplete="off">
         </div>
-      </div>
-      <div class="table-wrap">
-        <table class="data-table" id="deviceTable">
-          <thead>
-            <tr>
-              <th>状态</th>
-              <th>名称</th>
-              <th>类型</th>
-              <th>IP</th>
-              <th>MAC</th>
-              <th>接口</th>
-              <th class="num">信号</th>
-              <th class="num">速率</th>
-              <th class="num">流量</th>
-              <th>代理链路</th>
-              <th>代理策略</th>
-              <th class="num">最后在线</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
-      <div class="empty" id="deviceEmpty" hidden>没有匹配的设备</div>
-    </section>
+        <div class="device-table-wrap">
+          <table class="device-table" id="deviceTable">
+            <thead>
+              <tr>
+                <th>状态</th>
+                <th>设备</th>
+                <th class="policy-col">代理</th>
+                <th>IP / MAC</th>
+                <th>接口</th>
+                <th class="num">下行</th>
+                <th class="num">上行</th>
+                <th class="num">累计 ↓ / ↑</th>
+              </tr>
+            </thead>
+            <tbody id="deviceRateRows"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="deviceEmpty" hidden>没有匹配的设备</div>
+      </section>
 
     <div class="grid-bottom">
       <section class="card">

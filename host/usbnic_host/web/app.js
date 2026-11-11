@@ -47,6 +47,7 @@ const state = {
   usageTrendChart: null,
   systemHealthChart: null,
   devicePolicies: null,
+  traffic: null,
   policyBusy: false,
 };
 
@@ -141,14 +142,6 @@ function typeClass(type) {
   return "type-badge";
 }
 
-function signalClass(value) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) return "";
-  if (n >= -60) return "signal-strong";
-  if (n >= -72) return "signal-mid";
-  return "signal-weak";
-}
-
 function setService(ok) {
   const dot = $("serviceDot");
   const text = $("serviceText");
@@ -175,10 +168,10 @@ async function refresh() {
     ]);
     state.status = status;
     state.lastStatusAt = Date.now();
+    state.traffic = rates;
     if (policies) state.devicePolicies = policies;
     setService(true);
     renderAll(status, events.items || []);
-    renderDeviceRates(rates);
     renderPolicyDefault();
     setText("lastUpdate", `更新于 ${fmtTime(status.ts)}`);
   } catch (error) {
@@ -230,7 +223,7 @@ function renderAll(status, events) {
   renderModes(status);
   renderWarnings(status);
   renderInterfaces(status);
-  renderDevices(status);
+  renderDevices();
   renderEvents(events);
   setText("version", status.version || "--");
   renderChart(status);
@@ -879,103 +872,133 @@ function renderInterfaces(status) {
   }
 }
 
-function renderDevices(status) {
-  const tbody = $("deviceTable")?.querySelector("tbody");
+function mergedDevices() {
+  // 元数据来自 /api/status（在线、接口、信号），速率与流量来自 /api/devices/traffic
+  const meta = ((state.status || {}).devices || {}).items || [];
+  const traffic = (state.traffic || {}).items || [];
+  const byIp = new Map();
+  const byMac = new Map();
+  for (const item of meta) {
+    if (item.ip) byIp.set(item.ip, item);
+    if (item.mac) byMac.set(item.mac, item);
+  }
+  const rows = [];
+  const seen = new Set();
+  for (const item of traffic) {
+    const info = (item.ip && byIp.get(item.ip)) || (item.mac && byMac.get(item.mac)) || {};
+    const row = {
+      ...info,
+      ip: item.ip || info.ip,
+      mac: item.mac || info.mac,
+      hostname: item.hostname || info.hostname,
+      rx_rate_mbps: item.rx_rate != null ? item.rx_rate : info.rx_rate_mbps,
+      tx_rate_mbps: item.tx_rate != null ? item.tx_rate : info.tx_rate_mbps,
+      rx_bytes: item.rx_bytes != null ? item.rx_bytes : info.rx_bytes,
+      tx_bytes: item.tx_bytes != null ? item.tx_bytes : info.tx_bytes,
+      online: info.online !== undefined ? info.online : true,
+    };
+    if (row.ip) seen.add(row.ip);
+    if (row.mac) seen.add(row.mac);
+    rows.push(row);
+  }
+  // 没有出现流量、但仍在设备表里的（离线、仅租约）也要显示
+  for (const item of meta) {
+    if ((item.ip && seen.has(item.ip)) || (item.mac && seen.has(item.mac))) continue;
+    rows.push({ ...item });
+  }
+  rows.sort((a, b) => {
+    const offlineA = a.online === false ? 1 : 0;
+    const offlineB = b.online === false ? 1 : 0;
+    if (offlineA !== offlineB) return offlineA - offlineB;
+    const rateA = (a.rx_rate_mbps || 0) + (a.tx_rate_mbps || 0);
+    const rateB = (b.rx_rate_mbps || 0) + (b.tx_rate_mbps || 0);
+    if (rateA !== rateB) return rateB - rateA;
+    return String(a.name || a.hostname || a.ip || "").localeCompare(
+      String(b.name || b.hostname || b.ip || "")
+    );
+  });
+  return rows;
+}
+
+function renderDevices() {
+  const tbody = $("deviceRateRows");
   const empty = $("deviceEmpty");
   if (!tbody) return;
-  tbody.replaceChildren();
-  const items = ((status.devices || {}).items || []).filter(deviceMatches);
+  const items = mergedDevices().filter(deviceMatches);
   if (!items.length) {
+    tbody.replaceChildren();
     if (empty) empty.hidden = false;
     return;
   }
   if (empty) empty.hidden = true;
+  tbody.replaceChildren(...items.map(deviceRow));
+}
 
-  for (const item of items) {
-    const row = el("tr");
-    const online = Boolean(item.online);
-    if (!online) row.style.opacity = "0.68";
+function deviceRow(item) {
+  const row = el("tr");
+  const online = item.online !== false;
+  if (!online) row.style.opacity = "0.68";
 
-    const statusCell = el("td");
-    const statusLine = el("div", "cell-main");
-    const dotClass = online ? "on" : item.lease_only ? "warn" : "off";
-    statusLine.appendChild(el("span", `state-dot ${dotClass}`));
-    statusLine.appendChild(el("span", "", online ? "在线" : item.lease_only ? "仅租约" : "离线"));
-    statusCell.appendChild(statusLine);
-    row.appendChild(statusCell);
-
-    const nameCell = el("td");
-    const nameLine = el("div", "cell-main");
-    nameLine.appendChild(el("span", "cell-name", item.name || item.hostname || item.ip || "未知设备"));
-    if ((item.vendor || "").toLowerCase().includes("nintendo")) {
-      nameLine.appendChild(el("span", "type-badge nintendo", "Nintendo"));
-    } else if (item.vendor) {
-      nameLine.appendChild(el("span", "type-badge", item.vendor));
-    }
-    nameCell.appendChild(nameLine);
-    if (item.connected_seconds !== null && item.connected_seconds !== undefined) {
-      nameCell.appendChild(el("div", "cell-sub", `在线 ${fmtDuration(item.connected_seconds)}`));
-    }
-    row.appendChild(nameCell);
-
-    const typeCell = el("td");
-    typeCell.appendChild(el("span", typeClass(item.type), typeLabel(item.type)));
-    row.appendChild(typeCell);
-
-    row.appendChild(el("td", "mono", item.ip || "—"));
-    row.appendChild(el("td", "mono", item.mac || "—"));
-    row.appendChild(el("td", "muted", item.interface || "—"));
-
-    const signal = el("td", "num");
-    if (item.signal_dbm !== null && item.signal_dbm !== undefined) {
-      signal.textContent = `${item.signal_dbm} dBm`;
-      signal.classList.add(signalClass(item.signal_dbm));
-    } else {
-      signal.textContent = "—";
-    }
-    row.appendChild(signal);
-
-    const rate = el("td", "num");
-    if (item.rx_rate_mbps !== null || item.tx_rate_mbps !== null) {
-      rate.textContent = `↓${fmtMbps(item.rx_rate_mbps)} / ↑${fmtMbps(item.tx_rate_mbps)}`;
-    } else {
-      rate.textContent = "—";
-    }
-    row.appendChild(rate);
-
-    const traffic = el("td", "num");
-    if (item.byte_source) {
-      traffic.appendChild(
-        el("div", "", `↓${fmtBytes(item.rx_bytes)} / ↑${fmtBytes(item.tx_bytes)}`)
-      );
-      traffic.appendChild(el("div", "cell-sub", item.byte_source === "iw" ? "Wi-Fi 关联" : "代理连接"));
-    } else if (item.proxy_connections) {
-      traffic.textContent = `${item.proxy_connections} 条代理连接`;
-    } else {
-      traffic.textContent = "—";
-    }
-    row.appendChild(traffic);
-
-    const proxyCell = el("td");
-    const chains = item.proxy_chains || [];
-    if (chains.length) {
-      const list = el("div", "chain-list");
-      for (const chain of chains.slice(0, 3)) {
-        list.appendChild(el("span", "chain", chain));
-      }
-      proxyCell.appendChild(list);
-    } else if (item.proxy_connections) {
-      proxyCell.appendChild(el("span", "type-badge proxy", `${item.proxy_connections} 条`));
-    } else {
-      proxyCell.textContent = "—";
-    }
-    row.appendChild(proxyCell);
-
-    row.appendChild(renderPolicyCell(item));
-
-    row.appendChild(el("td", "num muted", online ? "刚刚" : fmtAgo(item.last_seen)));
-    tbody.appendChild(row);
+  const statusCell = el("td");
+  const statusLine = el("div", "cell-main");
+  const dotClass = online ? "on" : item.lease_only ? "warn" : "off";
+  statusLine.appendChild(el("span", `state-dot ${dotClass}`));
+  statusLine.appendChild(
+    el("span", "", online ? "在线" : item.lease_only ? "仅租约" : "离线")
+  );
+  statusCell.appendChild(statusLine);
+  if (!online && item.last_seen) {
+    statusCell.appendChild(el("div", "cell-sub", fmtAgo(item.last_seen)));
   }
+  row.appendChild(statusCell);
+
+  const nameCell = el("td");
+  const nameLine = el("div", "cell-main");
+  nameLine.appendChild(el("span", "cell-name", item.name || item.hostname || item.ip || "未知设备"));
+  if ((item.vendor || "").toLowerCase().includes("nintendo")) {
+    nameLine.appendChild(el("span", "type-badge nintendo", "Nintendo"));
+  } else if (item.vendor) {
+    nameLine.appendChild(el("span", "type-badge", item.vendor));
+  }
+  nameCell.appendChild(nameLine);
+  const sub = [];
+  if (item.type) sub.push(typeLabel(item.type));
+  if (item.signal_dbm !== null && item.signal_dbm !== undefined) sub.push(`${item.signal_dbm} dBm`);
+  if (item.connected_seconds) sub.push(`在线 ${fmtDuration(item.connected_seconds)}`);
+  if (!online && item.lease_only) sub.push("DHCP 租约");
+  if (sub.length) nameCell.appendChild(el("div", "cell-sub", sub.join(" · ")));
+  row.appendChild(nameCell);
+
+  const policyCell = el("td", "policy-cell");
+  if (item.mac) {
+    policyCell.appendChild(renderPolicySwitch(item.mac));
+  } else {
+    policyCell.textContent = "—";
+  }
+  row.appendChild(policyCell);
+
+  const idCell = el("td");
+  idCell.appendChild(el("div", "mono", item.ip || "—"));
+  if (item.mac) idCell.appendChild(el("div", "cell-sub mono", item.mac));
+  row.appendChild(idCell);
+
+  row.appendChild(el("td", "muted", item.interface || "—"));
+  row.appendChild(
+    el("td", "num", item.rx_rate_mbps != null ? `↓ ${fmtMbps(item.rx_rate_mbps)}` : "—")
+  );
+  row.appendChild(
+    el("td", "num", item.tx_rate_mbps != null ? `↑ ${fmtMbps(item.tx_rate_mbps)}` : "—")
+  );
+  row.appendChild(
+    el(
+      "td",
+      "num",
+      item.rx_bytes != null
+        ? `${fmtBytes(item.rx_bytes)} / ${fmtBytes(item.tx_bytes)}`
+        : "—"
+    )
+  );
+  return row;
 }
 
 function policyFor(mac) {
@@ -995,23 +1018,25 @@ function renderPolicyCell(item) {
     cell.textContent = "—";
     return cell;
   }
-  const info = policyFor(item.mac);
-  const next = info.policy === "proxy" ? "direct" : "proxy";
-  const button = el(
-    "button",
-    `policy-toggle ${info.policy === "proxy" ? "proxy" : "direct"}`,
-    info.policy === "proxy" ? "走代理" : "直连"
-  );
-  button.type = "button";
-  button.title = "点击切换为" + (next === "proxy" ? "走代理" : "直连");
-  button.disabled = state.policyBusy;
-  button.addEventListener("click", () => setDevicePolicy(item.mac, next));
-  cell.appendChild(button);
-  let hint = "未启用代理";
-  if (info.active) hint = info.effective === "proxy" ? "已走代理" : "直连中";
-  else if (info.policy === "proxy") hint = "代理未接管";
-  cell.appendChild(el("div", "cell-sub", hint));
+  cell.appendChild(renderPolicySwitch(item.mac));
   return cell;
+}
+
+function renderPolicySwitch(mac) {
+  const info = policyFor(mac);
+  const on = info.policy === "proxy";
+  const button = el("button", `policy-switch ${on ? "on" : "off"}`);
+  button.type = "button";
+  button.setAttribute("role", "switch");
+  button.setAttribute("aria-checked", on ? "true" : "false");
+  button.dataset.mac = mac;
+  button.title = on ? "当前：走代理（点击改为直连）" : "当前：直连（点击改为走代理）";
+  button.disabled = state.policyBusy;
+  button.appendChild(el("span", "knob"));
+  button.appendChild(el("span", "label", on ? "走代理" : "直连"));
+  const next = on ? "direct" : "proxy";
+  button.addEventListener("click", () => setDevicePolicy(mac, next));
+  return button;
 }
 
 function renderPolicyDefault() {
@@ -1027,7 +1052,7 @@ function renderPolicyDefault() {
 async function setDevicePolicy(mac, policy) {
   if (state.policyBusy) return;
   state.policyBusy = true;
-  if (state.status) renderDevices(state.status);
+  renderDevices();
   try {
     const response = await fetch("/api/devices/policy", {
       method: "PUT",
@@ -1067,10 +1092,9 @@ async function setDefaultPolicy(policy) {
 }
 
 function deviceMatches(item) {
-  if (state.deviceFilter === "online" && !item.online) return false;
-  if (state.deviceFilter === "wifi" && !["wifi-ap", "upstream"].includes(item.type)) return false;
-  if (state.deviceFilter === "wired" && item.type !== "wired") return false;
-  if (state.deviceFilter === "proxied" && !(item.proxy_connections > 0)) return false;
+  if (state.deviceFilter === "online" && item.online === false) return false;
+  if (state.deviceFilter === "offline" && item.online !== false) return false;
+  if (state.deviceFilter === "proxied" && policyFor(item.mac).policy !== "proxy") return false;
   if (!state.search) return true;
   const haystack = [
     item.name,
@@ -1080,7 +1104,6 @@ function deviceMatches(item) {
     item.vendor,
     item.interface,
     item.type,
-    ...(item.proxy_chains || []),
   ]
     .filter(Boolean)
     .join(" ")
@@ -1103,40 +1126,6 @@ function renderEvents(events) {
     item.appendChild(el("span", "event-msg", event.message));
     list.appendChild(item);
   }
-}
-
-function renderDeviceRates(payload) {
-  const body = $("deviceRateRows");
-  if (!body) return;
-  const items = (payload && payload.items) || [];
-  const known = {};
-  for (const item of ((state.status || {}).devices || {}).items || []) {
-    if (item.ip) known[item.ip] = item.name || item.hostname || "";
-  }
-  if (!items.length) {
-    const row = el("tr", "");
-    const cell = el("td", "empty-small", "暂无设备流量");
-    cell.colSpan = 5;
-    row.appendChild(cell);
-    body.replaceChildren(row);
-    return;
-  }
-  const rows = items.map((item) => {
-    const row = el("tr", "");
-    const name = known[item.ip] || item.hostname || item.ip || "未知设备";
-    row.appendChild(el("td", "device-name", name));
-    const idCell = el("td", "device-id");
-    idCell.appendChild(el("span", "", item.ip || "—"));
-    if (item.mac) idCell.appendChild(el("span", "device-mac", item.mac));
-    row.appendChild(idCell);
-    row.appendChild(el("td", "device-rate down", `↓ ${fmtMbps(item.rx_rate)}`));
-    row.appendChild(el("td", "device-rate up", `↑ ${fmtMbps(item.tx_rate)}`));
-    row.appendChild(
-      el("td", "device-total", `${fmtBytes(item.rx_bytes)} / ${fmtBytes(item.tx_bytes)}`)
-    );
-    return row;
-  });
-  body.replaceChildren(...rows);
 }
 
 function renderChart(status) {
@@ -2422,7 +2411,7 @@ function bindFilters() {
       filter.querySelectorAll("button").forEach((item) => {
         item.classList.toggle("active", item === button);
       });
-      if (state.status) renderDevices(state.status);
+      renderDevices();
     });
   }
 
@@ -2430,7 +2419,7 @@ function bindFilters() {
   if (search) {
     search.addEventListener("input", () => {
       state.search = search.value.trim().toLowerCase();
-      if (state.status) renderDevices(state.status);
+      renderDevices();
     });
   }
 

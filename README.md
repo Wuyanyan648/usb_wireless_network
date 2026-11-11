@@ -362,7 +362,7 @@ cd host && python3 -m pytest -q
 | 代理分流 | **可用**：nftables 层 `bypass_ips` 按 IP 直连，两个无线段走代理；TPROXY 覆盖多接口并用 counter 校验命中 |
 | 5G AP | **不可用**：AX211 无 5G AP 能力（no IR + iwlwifi 固件限制），探测后直接标注原因并跳过 |
 | 2.4G AP | **默认关闭**（避免与上游 AP 同频），`router_24g_enabled` 可开 |
-| 设备速率统计 | 可用：`GET /api/devices/traffic`，页面「设备速率」表格 |
+| 设备速率统计 | 可用：`GET /api/devices/traffic`，页面「设备」表格（在线状态、速率、流量与代理策略合并展示） |
 
 ### 开机自启
 
