@@ -231,6 +231,9 @@ def create_app(monitor: Monitor, config: Config) -> FastAPI:
             saved = state.load(config.data_dir)
             if saved:
                 state.save(config.data_dir, saved["mode"], body.enable, explicit=True)
+            # 总开关重新打开时，按已保存的设备策略恢复 TPROXY 接管
+            if body.enable:
+                result["install"] = _install_tproxy_if_needed(config, monitor)
         # 等采集器完成下一次采样，避免前端拿到切换前的旧状态
         time.sleep(2.2)
         snapshot = monitor.snapshot()
