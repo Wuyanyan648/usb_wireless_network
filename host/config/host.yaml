@@ -54,6 +54,34 @@ hotspot_cidr: 192.168.50.0/24
 # 热点密码文件：仅 root 可读（0600），由 usbnicd 读取后在面板展示
 hotspot_password_file: /etc/usbnic/hotspot.pass
 
+# ---------- 第四种模式：移动路由器（默认不启用，页面手动切换） ----------
+# 有线扩展口 + 5G(AX211) + 2.4G(USB) 双 AP；有线整段直连、无线段走代理。
+# 三个 profile 的 autoconnect 固定为 no，退出模式时按逆序断开并恢复 rfkill。
+router_lan_connection: usbnic-router-lan
+router_5g_connection: usbnic-router-5g
+router_24g_connection: usbnic-router-24g
+router_lan_iface: enx6c1ff7d02c4a     # 留空则沿用 gateway_iface
+router_lan_cidr: 10.10.10.0/24
+# 留空 = 自动探测（能起 5G AP 的才选）。新卡到货后填它的接口名，
+# 例如 wlx0c8268xxxxxx；先跑 POST /api/router/probe 验证再切换模式。
+router_5g_iface: ""            # Intel AX211，非 DFS 信道 36/149
+router_5g_cidr: 10.20.0.0/24
+router_5g_ssid: Laptop-5G
+router_5g_channel: 36
+router_24g_iface: wlx6c1ff7f46d6d     # RTL8821CU，5G 无 IR，仅 2.4G
+router_24g_cidr: 10.30.0.0/24
+router_24g_ssid: Laptop-2.4G
+router_24g_channel: 6
+# 默认关闭：上游华为 AP 的 2.4G 信道不可调，同频开 AP 只会互相压制。
+# 打开后 USB 卡才会建 10.30.0.0/24 的 AP；profile 与网段始终保留。
+router_24g_enabled: false
+# 有线整段直连（游戏机大流量不吃节点），无线段默认走代理
+router_wired_direct: true
+# 追加直连网段/单 IP（例如 "10.20.0.50/32"），优先级高于上面两项
+router_direct_cidrs: []
+# AX211 起 AP 的确认窗口（秒），超时则该 AP 降级
+router_ap_probe_seconds: 30
+
 # 开机自动进入家庭网关的判定条件：上游默认网关地址 + 下游网卡有载波
 # 留空则只检查网卡载波
 home_gateway: 192.168.1.1

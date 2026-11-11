@@ -28,11 +28,13 @@ fi
 
 usage() {
   cat <<EOF
-用法: $(basename "$0") [client|hotspot|gateway] [daemon 参数]
+用法: $(basename "$0") [client|hotspot|gateway|router] [daemon 参数]
 
   client    只作为普通客户端上网，有线优先、WiFi 兜底
   hotspot   USB 无线网卡开热点，本机与下游都走代理
   gateway   USB 有线网卡做家庭网关，本机与下游都走代理
+  router    移动路由器：有线扩展口 + 5G/2.4G 双 AP
+            （有线直连、无线走代理；需手动指定，不会自动进入）
 
 不带模式参数时只启动控制台，之后可在页面里切换模式。
 EOF
@@ -50,7 +52,7 @@ while (($#)); do
       MODE="${1#--mode=}"
       shift
       ;;
-    client | hotspot | gateway)
+    client | hotspot | gateway | router)
       MODE="$1"
       shift
       ;;
@@ -65,7 +67,7 @@ while (($#)); do
   esac
 done
 
-if [[ -n $MODE && ! $MODE =~ ^(client|hotspot|gateway)$ ]]; then
+if [[ -n $MODE && ! $MODE =~ ^(client|hotspot|gateway|router)$ ]]; then
   printf '未知模式: %s\n' "$MODE" >&2
   usage >&2
   exit 1

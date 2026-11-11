@@ -9,12 +9,12 @@ from typing import Any
 
 from .. import __version__
 from ..config import Config
-from ..net.interfaces import get_default_routes, get_interfaces, route_get_dev
+from ..net.interfaces import get_interfaces, route_get_dev
 from ..net.modes import detect_mode, mode_info
 from ..util import hostname, load_average, uptime_seconds
 from .devices import DeviceTracker, build_devices
 from .health import HealthChecker
-from .proxy import tproxy_active
+from .proxy import tproxy_status
 from .sources import get_clash, get_dhcp_leases, get_neigh, get_wifi_stations
 from .storage import Storage
 
@@ -76,7 +76,13 @@ class Monitor:
         ts = time.time()
         interfaces = get_interfaces(self.config)
         self._apply_rates(interfaces, ts)
-        routes = get_default_routes()
+        # get_interfaces 内部已经查过默认路由，这里直接摊平复用，避免每轮多跑一次 ip route
+        routes = [
+            route
+            for iface in interfaces
+            for route in iface.get("default_routes") or []
+        ]
+        routes.sort(key=lambda route: (route.get("metric") or 0, route.get("dev") or ""))
 
         if ts - self._health_ts >= self.config.health_interval:
             self._health = self.health_checker.check_all(interfaces, routes)
@@ -213,7 +219,9 @@ class Monitor:
         # Clash TUN 的默认路由在独立策略表 2022，main 表里看不到，
         # 用实际路由查询判断当前流量是否进入 TUN。
         default_via_tun = bool(tun_name) and route_get_dev("1.1.1.1") == tun_name
-        tproxy = tproxy_active()
+        tproxy_state = tproxy_status()
+        # 规则装上但 counter 为 0 说明实际没命中（流量被 TUN 抢走）
+        tproxy = bool(tproxy_state["installed"])
         clash_ok = bool(clash.get("ok"))
         active_connections = len(clash.get("connections") or [])
         downstream_connections = self._count_downstream(clash, mode)
@@ -236,6 +244,7 @@ class Monitor:
             "status": status,
             "mode": proxy_mode,
             "tproxy": tproxy,
+            "tproxy_hits": int(tproxy_state["packets"]),
             "tun": tun_name,
             "default_via_tun": default_via_tun,
             "clash_ok": clash_ok,

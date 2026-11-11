@@ -21,6 +21,7 @@ from .monitor.hotspot import hotspot_info
 from .monitor.proxy import set_proxy
 from .monitor.throughput import ThroughputMonitor
 from .net.modes import MODES, MODE_PROXY, apply_mode
+from .net.router import invalidate_router_status, probe_5g_ap, router_status
 from .net.speedtest import SpeedTestManager
 from . import state
 
@@ -64,6 +65,10 @@ def create_app(monitor: Monitor, config: Config) -> FastAPI:
     speedtest = SpeedTestManager(config, monitor)
     throughput = ThroughputMonitor(config, monitor)
     throughput.start()
+    # 只挂计数器，不改变转发；失败不影响主功能
+    from .monitor import device_stats
+
+    device_stats.ensure(config)
 
     @app.middleware("http")
     async def no_store(request, call_next):  # type: ignore[no-untyped-def]
@@ -203,19 +208,43 @@ def create_app(monitor: Monitor, config: Config) -> FastAPI:
                 content={"ok": False, "error": f"未知模式: {body.mode}"},
             )
         result = apply_mode(config, body.mode, body.proxy)
+        # 模式切换改了 NM 连接，只读状态的缓存立刻作废
+        invalidate_router_status()
         if result["ok"]:
             # 只有成功的选择才落盘，供守护进程重启后重放
             wanted = MODE_PROXY[body.mode] if body.proxy is None else bool(body.proxy)
             state.save(config.data_dir, body.mode, wanted, explicit=body.proxy is not None)
-        time.sleep(2.5)
+        time.sleep(4.0 if body.mode == "router" else 2.5)
         snapshot = monitor.snapshot()
         return {
             "ok": result["ok"],
-            "error": "" if result["ok"] else "部分步骤失败",
+            "error": ""
+            if result["ok"]
+            else str(result.get("error") or "部分步骤失败"),
             "steps": result.get("steps", []),
+            "fallback": result.get("fallback", ""),
+            "degraded": result.get("degraded", []),
             "mode": snapshot.get("mode", body.mode),
             "mode_label": snapshot.get("mode_label", ""),
             "proxy": snapshot.get("proxy", {}),
         }
+
+    @app.get("/api/devices/traffic")
+    def devices_traffic() -> dict:
+        """按设备的下行/上行实时速率与累计量（只读，来自 nftables 计数器）。"""
+        return throughput.device_snapshot()
+
+    @app.get("/api/router/status")
+    def router_info() -> dict:
+        return router_status(config)
+
+    @app.post("/api/router/probe")
+    def router_probe() -> dict:
+        """只读验证：AX211 起 AP 约 30 秒后自动断开，不切换模式。"""
+        try:
+            return probe_5g_ap(config)
+        finally:
+            # 探测过程中建/删过 profile 与 AP，缓存必须作废
+            invalidate_router_status()
 
     return app

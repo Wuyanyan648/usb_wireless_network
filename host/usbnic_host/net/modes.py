@@ -6,7 +6,9 @@ from typing import Any
 from ..config import Config
 from ..exec import run
 from ..util import read_text
-from ..monitor.proxy import set_proxy
+from ..monitor.proxy import proxy_mark, set_proxy
+from .interfaces import invalidate_nm_cache
+from .router import apply_router, teardown_router
 
 MODES: dict[str, dict[str, str]] = {
     "client": {
@@ -21,17 +23,51 @@ MODES: dict[str, dict[str, str]] = {
         "label": "家庭网关",
         "desc": "光猫 → 有线 → USB 共享；本机与下游都走代理",
     },
+    "router": {
+        "label": "移动路由器",
+        "desc": "有线扩展口 + 5G AP（2.4G 默认关闭，避免与上游 AP 同频）；有线直连、无线走代理（手动切换）",
+    },
 }
 
 # 每种模式开始时是否自动开启透明代理
-MODE_PROXY = {"client": False, "hotspot": True, "gateway": True}
+MODE_PROXY = {"client": False, "hotspot": True, "gateway": True, "router": True}
 
 
 def detect_mode(config: Config, interfaces: list[dict[str, Any]]) -> str:
     connections = {iface.get("connection") for iface in interfaces}
+    if (
+        config.router_lan_connection in connections
+        or config.router_5g_connection in connections
+        or config.router_24g_connection in connections
+    ):
+        return "router"
     if config.gateway_connection in connections:
         return "gateway"
     if config.hotspot_connection in connections:
+        return "hotspot"
+    return "client"
+
+
+def _active_connections() -> set[str]:
+    rc, out, _err = run(
+        ["nmcli", "-t", "-f", "NAME", "connection", "show", "--active"],
+        timeout=5.0,
+    )
+    if rc != 0:
+        return set()
+    return {line.strip() for line in out.splitlines() if line.strip()}
+
+
+def _mode_from_active(config: Config, active: set[str]) -> str:
+    if (
+        config.router_lan_connection in active
+        or config.router_5g_connection in active
+        or config.router_24g_connection in active
+    ):
+        return "router"
+    if config.gateway_connection in active:
+        return "gateway"
+    if config.hotspot_connection in active:
         return "hotspot"
     return "client"
 
@@ -116,34 +152,85 @@ def _enable_forward(config: Config) -> dict[str, Any]:
 
 
 def apply_mode(
-    config: Config, mode: str, proxy: bool | None = None
+    config: Config,
+    mode: str,
+    proxy: bool | None = None,
+    _fallback: bool = False,
 ) -> dict[str, Any]:
     """应用网络模式。
 
     proxy 为 None 时按模式默认值决定是否开启代理；为 False 时可显式保持关闭
     （开机自动进入家庭网关时使用），此时 Clash 未运行也不视为失败。
+
+    路由器模式任何一步失败都会逆序回退，并自动恢复到切换前的模式；回退过程
+    用 `_fallback` 防止递归。
     """
     if mode not in MODES:
         return {"ok": False, "mode": mode, "error": "未知模式", "steps": []}
 
     steps: list[dict[str, Any]] = []
+    degraded: list[str] = []
     if mode == "client":
         steps.append(_autoconnect(config.gateway_connection, False))
         steps.append(_autoconnect(config.hotspot_connection, False))
+        steps.extend(teardown_router(config))
         steps.append(_down(config.gateway_connection))
         steps.append(_down(config.hotspot_connection))
         steps.append(_ensure_uplink(config))
     elif mode == "hotspot":
         steps.append(_autoconnect(config.gateway_connection, False))
         steps.append(_autoconnect(config.hotspot_connection, True))
+        steps.append(_down(config.router_24g_connection))
+        steps.append(_down(config.router_5g_connection))
+        steps.append(_down(config.router_lan_connection))
         steps.append(_down(config.gateway_connection))
         steps.append(_up(config.hotspot_connection))
+    elif mode == "router":
+        previous = _mode_from_active(config, _active_connections())
+        steps.append(_autoconnect(config.gateway_connection, False))
+        steps.append(_autoconnect(config.hotspot_connection, False))
+        steps.append(_autoconnect(config.router_lan_connection, False))
+        router_result = apply_router(config)
+        steps.extend(router_result["steps"])
+        degraded = list(router_result.get("degraded") or [])
+        if not router_result["ok"]:
+            failed = next(
+                (step for step in steps if not step["ok"]), {"name": "router", "detail": ""}
+            )
+            steps.extend(teardown_router(config))
+            fallback_proxy = bool(proxy_mark(config))
+            fallback_steps: list[dict[str, Any]] = []
+            if previous != "router" and not _fallback:
+                fallback = apply_mode(
+                    config, previous, proxy=fallback_proxy, _fallback=True
+                )
+                fallback_steps = fallback.get("steps", [])
+            # 回退过程中连接又变了一轮，缓存必须作废
+            invalidate_nm_cache()
+            return {
+                "ok": False,
+                "mode": mode,
+                "error": (
+                    f"路由器模式在「{failed['name']}」失败：{failed['detail']}；"
+                    f"已回退到 {previous}"
+                ),
+                "steps": steps + fallback_steps,
+                "fallback": previous,
+                "degraded": degraded,
+                "proxy": {"ok": True, "steps": []},
+            }
     else:
         steps.append(_autoconnect(config.gateway_connection, True))
         steps.append(_autoconnect(config.hotspot_connection, False))
+        steps.append(_down(config.router_24g_connection))
+        steps.append(_down(config.router_5g_connection))
+        steps.append(_down(config.router_lan_connection))
         steps.append(_down(config.hotspot_connection))
         steps.append(_enable_forward(config))
         steps.append(_up(config.gateway_connection))
+
+    # 连接状态刚被改过，让接口采集立刻重新读 NM，而不是等缓存过期
+    invalidate_nm_cache()
 
     proxy_enable = MODE_PROXY[mode] if proxy is None else proxy
     proxy_result = set_proxy(config, proxy_enable, mode)
@@ -166,8 +253,18 @@ def apply_mode(
             )
         )
 
-    ok = all(step["ok"] for step in steps)
-    return {"ok": ok, "mode": mode, "steps": steps, "proxy": proxy_result}
+    # 无线 AP 起不来属于「降级」而非模式失败（仍有线扩展口可用）
+    degradable = {config.router_5g_connection, config.router_24g_connection}
+    ok = all(
+        step["ok"] or step["name"] in degradable for step in steps
+    )
+    return {
+        "ok": ok,
+        "mode": mode,
+        "steps": steps,
+        "proxy": proxy_result,
+        "degraded": degraded,
+    }
 
 
 def reinforce_mode(
@@ -180,7 +277,7 @@ def reinforce_mode(
     网关短暂掐断。
     """
     steps: list[dict[str, Any]] = []
-    if mode == "gateway":
+    if mode in ("gateway", "router"):
         steps.append(_enable_forward(config))
     proxy_enable = MODE_PROXY[mode] if proxy is None else proxy
     proxy_result = set_proxy(config, proxy_enable, mode)

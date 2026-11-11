@@ -39,6 +39,9 @@ class ThroughputMonitor:
         self._baseline: dict[str, tuple[float, int, int]] = {}
         self._last_demand = 0.0
         self._keep = False
+        self._devices: list[dict[str, float]] = []
+        self._device_prev: tuple[float, dict[str, tuple[int, int]]] | None = None
+        self._device_retry = 0.0
         self._stop = threading.Event()
         self._thread = threading.Thread(
             target=self._loop, name="throughput-monitor", daemon=True
@@ -134,14 +137,16 @@ class ThroughputMonitor:
 
     def _loop(self) -> None:
         while not self._stop.wait(SAMPLE_INTERVAL):
+            now = time.monotonic()
+            # 统计表只是只读计数器，与代理开关、页面是否打开无关，定期自愈
+            self._ensure_device_table(now)
             with self._lock:
-                active = self._keep or (time.monotonic() - self._last_demand <= DEMAND_GRACE)
+                active = self._keep or (now - self._last_demand <= DEMAND_GRACE)
             if not active:
                 # 暂停后恢复时重新建立基线，避免把空档期的流量算进 1 秒速率
                 if self._baseline:
                     self._baseline.clear()
                 continue
-            now = time.monotonic()
             counters = psutil.net_io_counters(pernic=True)
             with self._lock:
                 for name, io in counters.items():
@@ -166,3 +171,66 @@ class ThroughputMonitor:
                     if name not in counters:
                         self._rings.pop(name, None)
                         self._baseline.pop(name, None)
+            self._sample_devices(now)
+
+    def _ensure_device_table(self, now: float) -> None:
+        """每 30 秒确认一次计数表存在；与代理、页面打开与否无关。"""
+        from . import device_stats
+
+        if now < self._device_retry:
+            return
+        self._device_retry = now + 30.0
+        try:
+            device_stats.ensure_if_missing(self.config)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _sample_devices(self, now: float) -> None:
+        """每秒读一次 nft 计数器，按设备做差算速率（只读，不影响转发）。"""
+        from . import device_stats
+
+        try:
+            items = device_stats.device_table(self.config)
+        except Exception:  # noqa: BLE001
+            # 单次读取失败不能拖死采样线程，下一轮继续
+            return
+        if not items:
+            return
+        previous = self._device_prev
+        if previous is not None:
+            elapsed = now - previous[0]
+            if 0 < elapsed <= 10.0:
+                for item in items:
+                    old = previous[1].get(str(item["ip"]))
+                    if old is None:
+                        continue
+                    item["rx_rate"] = max(0, item["rx_bytes"] - old[0]) * 8 / elapsed / 1e6
+                    item["tx_rate"] = max(0, item["tx_bytes"] - old[1]) * 8 / elapsed / 1e6
+        for item in items:
+            item.setdefault("rx_rate", 0.0)
+            item.setdefault("tx_rate", 0.0)
+        with self._lock:
+            self._devices = items
+            self._device_prev = (
+                now,
+                {str(item["ip"]): (item["rx_bytes"], item["tx_bytes"]) for item in items},
+            )
+
+    def device_snapshot(self) -> dict[str, Any]:
+        with self._lock:
+            self._last_demand = time.monotonic()
+            if not self._baseline:
+                # 页面刚打开，先建立基线，下一秒开始有速率
+                self._device_prev = None
+            items = [dict(item) for item in self._devices]
+        items.sort(key=lambda item: (item.get("rx_rate", 0) + item.get("tx_rate", 0)), reverse=True)
+        for item in items:
+            item["rx_rate"] = round(float(item.get("rx_rate") or 0.0), 2)
+            item["tx_rate"] = round(float(item.get("tx_rate") or 0.0), 2)
+        return {
+            "ok": True,
+            "ts": round(time.time(), 3),
+            "count": len(items),
+            "items": items,
+            "note": "按源/目的 IP 统计的 LAN 侧转发速率，累计量来自 nftables 计数器",
+        }

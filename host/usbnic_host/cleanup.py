@@ -7,12 +7,13 @@ from pathlib import Path
 from typing import Any
 
 from .config import Config
+from .monitor import device_stats
 from .monitor.proxy import (
     clash_patch,
     cleanup_tproxy,
     clear_proxy_mark,
     proxy_mark,
-    tproxy_active,
+    tproxy_installed,
 )
 
 DEFAULT_CONFIG = Path(__file__).resolve().parent.parent / "config" / "host.yaml"
@@ -22,8 +23,9 @@ def cleanup(config: Config, disable_proxy: bool) -> dict[str, Any]:
     """清理上位机创建的 nftables/策略路由；可选关闭它开启的透明代理。"""
     mark = proxy_mark(config)
     cleanup_tproxy(config)
+    device_stats.remove()
     result: dict[str, Any] = {
-        "rules_clean": not tproxy_active(),
+        "rules_clean": not tproxy_installed(),
         "proxy_mark": mark,
         "proxy_disabled": None,
         "proxy_error": "",

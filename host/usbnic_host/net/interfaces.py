@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import socket
+import threading
+import time
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +13,18 @@ from ..exec import run, run_json, run_text
 from ..util import normalize_mac, read_text
 
 SYS_NET = Path("/sys/class/net")
+
+# nmcli device status 一次约 14ms 子进程 CPU，而 device→profile 的映射在模式不变时
+# 几乎不动；按 8s 缓存，模式切换后由 invalidate_nm_cache 立即失效。
+NM_CACHE_TTL = 8.0
+_nm_cache: dict[str, Any] = {"ts": 0.0, "map": {}}
+_nm_lock = threading.Lock()
+
+
+def invalidate_nm_cache() -> None:
+    with _nm_lock:
+        _nm_cache["ts"] = 0.0
+        _nm_cache["map"] = {}
 
 
 def _carrier(name: str) -> bool | None:
@@ -148,7 +162,12 @@ def get_default_routes() -> list[dict[str, Any]]:
     return routes
 
 
-def _nm_connections() -> dict[str, str]:
+def _nm_connections(ttl: float = NM_CACHE_TTL) -> dict[str, str]:
+    now = time.monotonic()
+    with _nm_lock:
+        cached = _nm_cache["map"]
+        if cached and now - _nm_cache["ts"] < ttl:
+            return dict(cached)
     text = run_text(
         ["nmcli", "-t", "-f", "DEVICE,CONNECTION", "device", "status"],
         timeout=1.5,
@@ -163,7 +182,10 @@ def _nm_connections() -> dict[str, str]:
         connection = connection.replace("\\:", ":").replace("\\\\", "\\")
         if device and connection and connection not in ("--", ""):
             result[device] = connection
-    return result
+    with _nm_lock:
+        _nm_cache["ts"] = now
+        _nm_cache["map"] = result
+    return dict(result)
 
 
 def _duplex_text(value: int) -> str | None:

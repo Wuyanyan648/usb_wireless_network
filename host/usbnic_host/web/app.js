@@ -1,5 +1,9 @@
 const POLL_MS = 2000;
 const PROXY_POLL_MS = 10000;
+// 路由器只读状态要 fork nmcli/iw，不必跟 2s 主循环同频；服务端另有 15s 缓存
+const ROUTER_POLL_MS = 10000;
+// 页面在后台时整体降频，避免多个标签页一起空转
+const HIDDEN_POLL_MS = 15000;
 const MAX_POINTS = 90;
 
 const state = {
@@ -12,11 +16,14 @@ const state = {
   proxyBusy: false,
   modeBusy: false,
   lastStatusAt: 0,
+  refreshTimer: null,
   proxyOverview: null,
   proxySignature: "",
   proxyFilters: {},
   proxyEls: {},
   proxyGroupBusy: "",
+  routerStatus: null,
+  routerTimer: null,
   hotspot: null,
   hotspotReveal: false,
   hotspotPassword: "",
@@ -150,14 +157,16 @@ async function refresh() {
   if (state.busy) return;
   state.busy = true;
   try {
-    const [status, events] = await Promise.all([
+    const [status, events, rates] = await Promise.all([
       fetchJSON("/api/status"),
       fetchJSON("/api/events?limit=40"),
+      fetchJSON("/api/devices/traffic").catch(() => ({ items: [] })),
     ]);
     state.status = status;
     state.lastStatusAt = Date.now();
     setService(true);
     renderAll(status, events.items || []);
+    renderDeviceRates(rates);
     setText("lastUpdate", `更新于 ${fmtTime(status.ts)}`);
   } catch (error) {
     setService(false);
@@ -166,6 +175,40 @@ async function refresh() {
   } finally {
     state.busy = false;
   }
+}
+
+// 路由器只读状态单独一个稍慢的节拍：每次请求会 fork nmcli/iw，没必要跟主循环同频
+async function refreshRouter() {
+  if (!document.hidden) {
+    try {
+      state.routerStatus = await fetchJSON("/api/router/status");
+      if (state.status) renderModes(state.status);
+    } catch (error) {
+      console.warn(error);
+    }
+  }
+  scheduleRouter();
+}
+
+function scheduleRouter() {
+  if (state.routerTimer) clearTimeout(state.routerTimer);
+  state.routerTimer = setTimeout(
+    refreshRouter,
+    document.hidden ? HIDDEN_POLL_MS : ROUTER_POLL_MS
+  );
+}
+
+function scheduleRefresh() {
+  if (state.refreshTimer) clearTimeout(state.refreshTimer);
+  state.refreshTimer = setTimeout(
+    runRefresh,
+    document.hidden ? HIDDEN_POLL_MS : POLL_MS
+  );
+}
+
+async function runRefresh() {
+  await refresh();
+  scheduleRefresh();
 }
 
 function renderAll(status, events) {
@@ -325,6 +368,22 @@ function renderModes(status) {
     text.appendChild(el("span", "", item.desc));
     row.appendChild(text);
 
+    if (item.key === "router" && state.routerStatus) {
+      const cap = el("div", "mode-cap");
+      const ap5 = state.routerStatus.ap_5g || {};
+      const ap24 = state.routerStatus.ap_24g || {};
+      const line5 = ap5.available
+        ? `5G 可用：${ap5.iface || "自动"} ch${ap5.channel}`
+        : `5G 不可用：${ap5.reason || "能力未知"}`;
+      const line24 = ap24.enabled
+        ? ap24.available
+          ? `2.4G 可用：${ap24.iface} ch${ap24.channel}`
+          : `2.4G 不可用：${ap24.reason || "能力未知"}`
+        : "2.4G 默认关闭";
+      cap.textContent = `${line5} · ${line24}`;
+      text.appendChild(cap);
+    }
+
     const button = el(
       "button",
       `mode-btn${item.active ? " active" : ""}`,
@@ -421,6 +480,8 @@ function updateProxyMeta(overview) {
 
 async function refreshProxies(force = false) {
   if (state.proxyGroupBusy) return;
+  // 页面在后台时不再拉 60KB 的节点列表
+  if (!force && document.hidden) return;
   // 用户正在筛选节点时不重建列表，避免输入框失焦
   const active = document.activeElement;
   if (!force && active && active.classList && active.classList.contains("proxy-search")) {
@@ -939,6 +1000,40 @@ function renderEvents(events) {
     item.appendChild(el("span", "event-msg", event.message));
     list.appendChild(item);
   }
+}
+
+function renderDeviceRates(payload) {
+  const body = $("deviceRateRows");
+  if (!body) return;
+  const items = (payload && payload.items) || [];
+  const known = {};
+  for (const item of ((state.status || {}).devices || {}).items || []) {
+    if (item.ip) known[item.ip] = item.name || item.hostname || "";
+  }
+  if (!items.length) {
+    const row = el("tr", "");
+    const cell = el("td", "empty-small", "暂无设备流量");
+    cell.colSpan = 5;
+    row.appendChild(cell);
+    body.replaceChildren(row);
+    return;
+  }
+  const rows = items.map((item) => {
+    const row = el("tr", "");
+    const name = known[item.ip] || item.hostname || item.ip || "未知设备";
+    row.appendChild(el("td", "device-name", name));
+    const idCell = el("td", "device-id");
+    idCell.appendChild(el("span", "", item.ip || "—"));
+    if (item.mac) idCell.appendChild(el("span", "device-mac", item.mac));
+    row.appendChild(idCell);
+    row.appendChild(el("td", "device-rate down", `↓ ${fmtMbps(item.rx_rate)}`));
+    row.appendChild(el("td", "device-rate up", `↑ ${fmtMbps(item.tx_rate)}`));
+    row.appendChild(
+      el("td", "device-total", `${fmtBytes(item.rx_bytes)} / ${fmtBytes(item.tx_bytes)}`)
+    );
+    return row;
+  });
+  body.replaceChildren(...rows);
 }
 
 function renderChart(status) {
@@ -1877,20 +1972,25 @@ function init() {
   const hotspotCopy = $("hotspotCopy");
   if (hotspotCopy) hotspotCopy.addEventListener("click", copyHotspotPassword);
   refresh();
+  refreshRouter();
+  scheduleRefresh();
   refreshProxies();
   refreshHotspot();
   refreshSpeedtest();
   refreshThroughput();
-  setInterval(refresh, POLL_MS);
   setInterval(refreshProxies, PROXY_POLL_MS);
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) {
       refresh();
+      refreshRouter();
       refreshProxies();
       refreshHotspot();
       refreshSpeedtest();
       refreshThroughput();
     }
+    // 前后台切换后按新的节拍重新排期（前台 2s / 后台 15s）
+    scheduleRefresh();
+    scheduleRouter();
   });
 }
 

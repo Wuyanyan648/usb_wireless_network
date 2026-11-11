@@ -67,6 +67,21 @@ def clash_running(config: Config) -> bool:
     return bool(result["ok"])
 
 
+def _core_pids() -> list[int]:
+    """列出本机正在运行的 verge-mihomo 进程，用于避免重复拉起内核。"""
+    pids: list[int] = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            cmdline = (entry / "cmdline").read_bytes()
+        except OSError:
+            continue
+        if b"verge-mihomo" in cmdline:
+            pids.append(int(entry.name))
+    return pids
+
+
 def _service_available(config: Config) -> bool:
     result = _request(f"{config.clash_service_api}/version", timeout=1.5)
     return bool(result["ok"])
@@ -138,6 +153,29 @@ def ensure_clash(config: Config) -> dict[str, Any]:
         return {"ok": True, "started": False, "error": "", "steps": []}
 
     steps: list[dict[str, Any]] = []
+
+    # 已有内核进程但 API 还没就绪：等它起来，绝不再拉第二个实例
+    # （曾出现同参数双进程并存，统计口径错乱）
+    existing = _core_pids()
+    if existing:
+        deadline = time.monotonic() + 20.0
+        while time.monotonic() < deadline:
+            if clash_running(config):
+                steps.append(
+                    {
+                        "name": "reuse-existing",
+                        "ok": True,
+                        "detail": f"复用已运行内核 pid={existing}",
+                    }
+                )
+                return {"ok": True, "started": False, "error": "", "steps": steps}
+            time.sleep(0.5)
+        return {
+            "ok": False,
+            "started": False,
+            "error": f"检测到内核进程 {existing} 但控制口无响应，请检查后手动处理",
+            "steps": steps,
+        }
 
     if not _service_available(config):
         rc, _out, err = run(

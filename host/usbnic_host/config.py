@@ -44,6 +44,27 @@ class Config:
     hotspot_cidr: str = "192.168.50.0/24"
     # 热点密码文件：仅 root 可读，明文不进入仓库
     hotspot_password_file: str = "/etc/usbnic/hotspot.pass"
+    # 第四种模式「移动路由器」：有线扩展口 + 5G/2.4G 双 AP
+    router_lan_connection: str = "usbnic-router-lan"
+    router_5g_connection: str = "usbnic-router-5g"
+    router_24g_connection: str = "usbnic-router-24g"
+    router_lan_iface: str = ""  # 留空则沿用 gateway_iface
+    router_lan_cidr: str = "10.10.10.0/24"
+    # 留空表示按能力自动挑一块能起 5G AP 的网卡
+    router_5g_iface: str = ""
+    router_5g_cidr: str = "10.20.0.0/24"
+    router_5g_ssid: str = "Laptop-5G"
+    router_5g_channel: int = 36
+    router_24g_iface: str = "wlx6c1ff7f46d6d"
+    router_24g_cidr: str = "10.30.0.0/24"
+    router_24g_ssid: str = "Laptop-2.4G"
+    router_24g_channel: int = 6
+    # 默认关闭：上游华为 AP 的 2.4G 信道不可调，同频会互相压制
+    router_24g_enabled: bool = False
+    # 默认「有线整段直连、无线段走代理」；可按网段/单 IP 追加例外
+    router_wired_direct: bool = True
+    router_direct_cidrs: list[str] = field(default_factory=list)
+    router_ap_probe_seconds: float = 30.0
     # 家庭网关开机判定：上游默认网关必须是这个地址（留空则只看网卡载波）
     home_gateway: str = ""
     # 宽带测速：多线程直连国内镜像，上传端点需能接收 POST
@@ -115,6 +136,40 @@ class Config:
                 raw.get("hotspot_password_file", "/etc/usbnic/hotspot.pass")
                 or "/etc/usbnic/hotspot.pass"
             ),
+            router_lan_connection=str(
+                raw.get("router_lan_connection", "usbnic-router-lan")
+                or "usbnic-router-lan"
+            ),
+            router_5g_connection=str(
+                raw.get("router_5g_connection", "usbnic-router-5g")
+                or "usbnic-router-5g"
+            ),
+            router_24g_connection=str(
+                raw.get("router_24g_connection", "usbnic-router-24g")
+                or "usbnic-router-24g"
+            ),
+            router_lan_iface=str(raw.get("router_lan_iface", "") or ""),
+            router_lan_cidr=str(raw.get("router_lan_cidr", "10.10.10.0/24")),
+            router_5g_iface=str(raw.get("router_5g_iface", "wlp0s20f3") or ""),
+            router_5g_cidr=str(raw.get("router_5g_cidr", "10.20.0.0/24")),
+            router_5g_ssid=str(raw.get("router_5g_ssid", "Laptop-5G") or "Laptop-5G"),
+            router_5g_channel=int(raw.get("router_5g_channel", 36)),
+            router_24g_iface=str(
+                raw.get("router_24g_iface", "wlx6c1ff7f46d6d") or ""
+            ),
+            router_24g_cidr=str(raw.get("router_24g_cidr", "10.30.0.0/24")),
+            router_24g_ssid=str(
+                raw.get("router_24g_ssid", "Laptop-2.4G") or "Laptop-2.4G"
+            ),
+            router_24g_channel=int(raw.get("router_24g_channel", 6)),
+            router_24g_enabled=bool(raw.get("router_24g_enabled", False)),
+            router_wired_direct=bool(raw.get("router_wired_direct", True)),
+            router_direct_cidrs=[
+                str(item).strip()
+                for item in (raw.get("router_direct_cidrs") or [])
+                if str(item).strip()
+            ],
+            router_ap_probe_seconds=float(raw.get("router_ap_probe_seconds", 30.0)),
             home_gateway=str(raw.get("home_gateway", "") or ""),
             speedtest_downloads=[
                 str(item)
@@ -172,6 +227,23 @@ class Config:
             "hotspot_iface": self.hotspot_iface,
             "hotspot_cidr": self.hotspot_cidr,
             "hotspot_password_file": self.hotspot_password_file,
+            "router_lan_connection": self.router_lan_connection,
+            "router_5g_connection": self.router_5g_connection,
+            "router_24g_connection": self.router_24g_connection,
+            "router_lan_iface": self.router_lan_iface,
+            "router_lan_cidr": self.router_lan_cidr,
+            "router_5g_iface": self.router_5g_iface,
+            "router_5g_cidr": self.router_5g_cidr,
+            "router_5g_ssid": self.router_5g_ssid,
+            "router_5g_channel": self.router_5g_channel,
+            "router_24g_iface": self.router_24g_iface,
+            "router_24g_cidr": self.router_24g_cidr,
+            "router_24g_ssid": self.router_24g_ssid,
+            "router_24g_channel": self.router_24g_channel,
+            "router_24g_enabled": self.router_24g_enabled,
+            "router_wired_direct": self.router_wired_direct,
+            "router_direct_cidrs": list(self.router_direct_cidrs),
+            "router_ap_probe_seconds": self.router_ap_probe_seconds,
             "home_gateway": self.home_gateway,
             "clash_tproxy_port": self.clash_tproxy_port,
             "clash_redir_port": self.clash_redir_port,

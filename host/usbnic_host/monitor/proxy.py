@@ -67,10 +67,17 @@ def clash_patch(config: Config, payload: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "status": 0, "error": str(exc)}
 
 
-def set_tun(config: Config, enable: bool) -> dict[str, Any]:
-    """通过 Clash external-controller 动态开关 TUN（用于非网关模式的本机代理）。"""
+def set_tun(
+    config: Config, enable: bool, keep_tproxy: bool = False
+) -> dict[str, Any]:
+    """通过 Clash external-controller 动态开关 TUN（用于本机代理）。
+
+    keep_tproxy=True 时不动已安装的 TPROXY 表：否则开启 TUN 会顺手把下游
+    劫持规则删掉，导致流量改走 TUN、源地址被改写成 198.18.0.1。
+    """
     if enable:
-        cleanup_tproxy(config, clear_port=True)
+        if not keep_tproxy:
+            cleanup_tproxy(config, clear_port=True)
         payload: dict[str, Any] = {
             "tun": {
                 "enable": True,
@@ -84,6 +91,18 @@ def set_tun(config: Config, enable: bool) -> dict[str, Any]:
         payload = {"tun": {"enable": False}}
     result = clash_patch(config, payload)
     return {"ok": result["ok"], "error": result["error"], "steps": [result]}
+
+
+def _ensure_device_stats(config: Config) -> None:
+    """设备速率统计与代理解耦：切换代理后确认计数表仍在。
+
+    `usbnic_stat` 只是 prerouting/postrouting 上的只读计数器，和 TUN/TPROXY
+    没有任何关系；但外部清理（cleanup.py、手工 nft flush）可能顺手把它删掉。
+    这里在每次代理开关后补一次幂等检查，避免"关代理后设备速率归零"。
+    """
+    from . import device_stats
+
+    device_stats.ensure_if_missing(config)
 
 
 def set_proxy(config: Config, enable: bool, mode: str) -> dict[str, Any]:
@@ -100,6 +119,7 @@ def set_proxy(config: Config, enable: bool, mode: str) -> dict[str, Any]:
         result = clash_patch(config, {"tun": {"enable": False}})
         if result["ok"]:
             clear_proxy_mark(config)
+        _ensure_device_stats(config)
         return {"ok": result["ok"], "error": result["error"], "steps": [result]}
     # 内核没运行就自动拉起；已运行则直接复用
     ensured = ensure_clash(config)
@@ -110,50 +130,106 @@ def set_proxy(config: Config, enable: bool, mode: str) -> dict[str, Any]:
             "steps": ensured.get("steps", []),
         }
     if mode == "hotspot":
-        result = enable_tproxy(config, config.hotspot_iface, config.hotspot_cidr)
+        result = enable_tproxy(config, mode="hotspot")
     elif mode == "gateway":
-        result = enable_tproxy(config, config.gateway_iface, config.lan_cidr)
+        result = enable_tproxy(config, mode="gateway")
+    elif mode == "router":
+        result = enable_tproxy(config, mode="router")
     else:
         result = set_tun(config, True)
     if result.get("ok"):
-        mark_proxy(config, "tproxy" if mode in ("hotspot", "gateway") else "tun")
+        mark_proxy(
+            config,
+            "tproxy" if mode in ("hotspot", "gateway", "router") else "tun",
+        )
+    _ensure_device_stats(config)
     return result
 
 
-def _bypass_networks(cidr: str) -> list[str]:
-    networks = [
-        cidr,
-        "127.0.0.0/8",
-        # 上游光猫/路由器所在网段，保持直连便于管理
-        "192.168.0.0/16",
-        "169.254.0.0/16",
-        "224.0.0.0/4",
-        "240.0.0.0/4",
-        "255.255.255.255",
+# 私网 / 环回 / 组播不进代理：既保证设备互访与上游管理页可用，
+# 也避免把本机回程流量再次劫持。注意不要排除 198.18.0.0/16——LAN 客户端
+# 从 dnsmasq 拿到的 fake-IP 必须被 TPROXY 送回 Clash 才能映射回域名。
+BYPASS_NETWORKS = [
+    "10.0.0.0/8",
+    "172.16.0.0/12",
+    "192.168.0.0/16",
+    "127.0.0.0/8",
+    "169.254.0.0/16",
+    "224.0.0.0/4",
+    "240.0.0.0/4",
+    "255.255.255.255",
+]
+
+
+def router_targets(config: Config) -> tuple[list[str], list[str], list[str]]:
+    """返回路由器模式的（下游接口, 需要代理的网段, 直连网段）。"""
+    ifaces = [
+        iface
+        for iface in (
+            config.router_lan_iface or config.gateway_iface,
+            config.router_5g_iface,
+        )
+        if iface
     ]
-    seen: list[str] = []
-    for item in networks:
-        if item and item not in seen:
-            seen.append(item)
-    return seen
+    cidrs = [
+        cidr
+        for cidr in (
+            config.router_lan_cidr,
+            config.router_5g_cidr,
+        )
+        if cidr
+    ]
+    if config.router_24g_enabled and config.router_24g_iface:
+        ifaces.append(config.router_24g_iface)
+        cidrs.append(config.router_24g_cidr)
+    bypass = list(config.router_direct_cidrs)
+    if config.router_wired_direct:
+        bypass.append(config.router_lan_cidr)
+    return ifaces, cidrs, bypass
 
 
 def tproxy_ruleset(
-    config: Config, iface: str | None = None, cidr: str | None = None
+    config: Config,
+    iface: str | None = None,
+    cidr: str | None = None,
+    *,
+    ifaces: list[str] | None = None,
+    cidrs: list[str] | None = None,
+    bypass: list[str] | None = None,
 ) -> str:
-    """生成只劫持下游 LAN 转发的 nftables 规则（TCP + UDP，保留源 IP）。"""
-    iface = iface or config.gateway_iface
-    cidr = cidr or config.lan_cidr
-    bypass = ", ".join(_bypass_networks(cidr))
+    """生成劫持下游 LAN 转发的 nftables 规则（TCP + UDP，保留真实源 IP）。
+
+    支持一次覆盖多个下游接口（有线扩展口 + 5G AP + 2.4G AP）。`counter`
+    让 `tproxy_status()` 能判断规则是否真的命中，而不只是"表存在"。
+    """
+    ifaces = ifaces if ifaces is not None else ([iface] if iface else [config.gateway_iface])
+    cidrs = cidrs if cidrs is not None else ([cidr] if cidr else [config.lan_cidr])
+    ifaces = [item for item in ifaces if item]
+    cidrs = [item for item in cidrs if item]
+    bypass = [item for item in (bypass or []) if item]
+    if not ifaces or not cidrs:
+        return ""
+    nft_ifaces = ", ".join(f'"{item}"' for item in ifaces)
+    lan_elements = ", ".join(cidrs)
+    daddr = ", ".join(BYPASS_NETWORKS)
+    bypass_rule = (
+        f"        ip saddr {{ {', '.join(bypass)} }} return\n" if bypass else ""
+    )
     return (
         f"table ip {NFT_TABLE} {{\n"
+        "    set lan_nets {\n"
+        "        type ipv4_addr\n"
+        "        flags interval\n"
+        f"        elements = {{ {lan_elements} }}\n"
+        "    }\n"
         "    chain prerouting {\n"
         "        type filter hook prerouting priority mangle; policy accept;\n"
-        f'        iifname != "{iface}" return\n'
-        f"        ip saddr != {cidr} return\n"
-        f"        ip daddr {{ {bypass} }} return\n"
+        f"        iifname != {{ {nft_ifaces} }} return\n"
+        "        ip saddr != @lan_nets return\n"
+        f"        ip daddr {{ {daddr} }} return\n"
+        f"{bypass_rule}"
         f"        meta l4proto {{ tcp, udp }} tproxy to :{config.clash_tproxy_port} "
-        "meta mark set 1 accept\n"
+        "meta mark set 1 counter accept\n"
         "    }\n"
         "}\n"
     )
@@ -175,11 +251,29 @@ def cleanup_tproxy(config: Config, clear_port: bool = False) -> None:
 
 
 def enable_tproxy(
-    config: Config, iface: str | None = None, cidr: str | None = None
+    config: Config,
+    iface: str | None = None,
+    cidr: str | None = None,
+    *,
+    mode: str | None = None,
+    ifaces: list[str] | None = None,
+    cidrs: list[str] | None = None,
+    bypass: list[str] | None = None,
 ) -> dict[str, Any]:
-    iface = iface or config.gateway_iface
-    cidr = cidr or config.lan_cidr
-    if not iface:
+    if mode == "router":
+        ifaces, cidrs, bypass = router_targets(config)
+    elif mode == "hotspot":
+        ifaces = [config.hotspot_iface] if config.hotspot_iface else []
+        cidrs = [config.hotspot_cidr]
+    elif mode == "gateway":
+        ifaces = [config.gateway_iface] if config.gateway_iface else []
+        cidrs = [config.lan_cidr]
+    if ifaces is None:
+        ifaces = [iface] if iface else [config.gateway_iface]
+    if cidrs is None:
+        cidrs = [cidr] if cidr else [config.lan_cidr]
+    ifaces = [item for item in ifaces if item]
+    if not ifaces:
         return {"ok": False, "error": "未配置下游接口", "steps": []}
     steps: list[dict[str, Any]] = []
 
@@ -196,18 +290,25 @@ def enable_tproxy(
                 "dns-hijack": ["any:53"],
             },
             "tproxy-port": config.clash_tproxy_port,
+            # TPROXY 的透明套接字必须绑 0.0.0.0；mihomo 在 allow-lan=false 时
+            # 会把所有监听器绑到 127.0.0.1，导致 nft tproxy 找不到套接字。
+            # 由此带来的 7897/9097 暴露由 nft usbnic_guard 表兜底。
+            "allow-lan": True,
         },
     )
     steps.append({"name": "clash", **clash})
     if not clash["ok"]:
         return {"ok": False, "error": clash["error"], "steps": steps}
 
-    # 2) 安装 nftables 劫持规则
+    # 2) 安装 nftables 劫持规则（可同时覆盖多个下游接口）
     _delete_table()
+    ruleset = tproxy_ruleset(
+        config, ifaces=ifaces, cidrs=cidrs, bypass=bypass
+    )
     rc, _out, err = run(
         ["nft", "-f", "-"],
         timeout=5.0,
-        input_text=tproxy_ruleset(config, iface, cidr),
+        input_text=ruleset,
     )
     steps.append(
         {
@@ -254,6 +355,64 @@ def enable_tproxy(
     return {"ok": rc == 0, "error": err.strip() if rc != 0 else "", "steps": steps}
 
 
-def tproxy_active() -> bool:
+def tproxy_status() -> dict[str, Any]:
+    """读取 TPROXY 规则的真实状态：表是否存在、规则是否命中（counter）。
+
+    只看"表存在"会把"规则装上了但没匹配任何包"误判成已接管，这正是下游
+    流量被 masquerade 成 198.18.0.1 时面板仍显示正常的原因。
+    """
+    rc, out, err = run(["nft", "-j", "list", "table", "ip", NFT_TABLE], timeout=2.0)
+    if rc != 0:
+        return {
+            "installed": False,
+            "rule": False,
+            "packets": 0,
+            "bytes": 0,
+            "error": (err or out).strip(),
+        }
+    packets = 0
+    packets_bytes = 0
+    seen_rule = False
+    try:
+        data = json.loads(out)
+        for item in data.get("nftables", []):
+            rule = item.get("rule")
+            if not rule:
+                continue
+            exprs = rule.get("expr") or []
+            if not any(isinstance(expr, dict) and "tproxy" in expr for expr in exprs):
+                continue
+            seen_rule = True
+            for expr in exprs:
+                if isinstance(expr, dict) and "counter" in expr:
+                    counter = expr.get("counter") or {}
+                    packets += int(counter.get("packets") or 0)
+                    packets_bytes = int(counter.get("bytes") or 0)
+        if seen_rule is False:
+            return {"installed": True, "rule": False, "packets": 0, "bytes": 0, "error": ""}
+        return {
+            "installed": True,
+            "rule": True,
+            "packets": packets,
+            "bytes": packets_bytes,
+            "error": "",
+        }
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        return {
+            "installed": True,
+            "rule": False,
+            "packets": 0,
+            "bytes": 0,
+            "error": str(exc),
+        }
+
+
+def tproxy_installed() -> bool:
     rc, _out, _err = run(["nft", "list", "table", "ip", NFT_TABLE], timeout=2.0)
     return rc == 0
+
+
+def tproxy_active() -> bool:
+    """只有规则存在且确实命中过流量，才算真正接管。"""
+    status = tproxy_status()
+    return bool(status["installed"] and status["packets"] > 0)

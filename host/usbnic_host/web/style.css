@@ -327,6 +327,77 @@ input {
   letter-spacing: 0.1px;
 }
 
+.mode-cap {
+  display: block;
+  margin-top: 4px;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--faint);
+}
+
+.device-table-wrap {
+  overflow-x: auto;
+}
+
+.device-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.device-table th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--faint);
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--line);
+  white-space: nowrap;
+}
+
+.device-table td {
+  padding: 7px 8px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+
+.device-table tr:last-child td {
+  border-bottom: none;
+}
+
+.device-name {
+  font-weight: 600;
+}
+
+.device-id {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.device-mac {
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.device-rate {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.device-rate.down {
+  color: var(--rx, #3b82f6);
+}
+
+.device-rate.up {
+  color: var(--tx, #22c55e);
+}
+
+.device-total {
+  color: var(--faint);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 .hint {
   color: var(--faint);
   font-size: 12px;

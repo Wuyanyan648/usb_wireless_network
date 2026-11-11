@@ -288,7 +288,7 @@ sudo systemctl restart usbnic-tune.service
 
 ## 上位机（Web 控制台）
 
-`host/` 是运行在本机的 FastAPI 控制台，默认监听 `http://127.0.0.1:8787`，用于查看上行健康、接口吞吐、在线设备，并在三种网络模式之间切换。
+`host/` 是运行在本机的 FastAPI 控制台，默认监听 `http://127.0.0.1:8787`，用于查看上行健康、接口吞吐、在线设备，并在四种网络模式之间切换。
 
 ```bash
 # 一键启动（非 root 会自动用 pkexec 提权）
@@ -296,6 +296,7 @@ scripts/host-start.sh              # 只启动控制台
 scripts/host-start.sh gateway      # 启动并切到家庭网关
 scripts/host-start.sh hotspot      # 启动并切到 USB WiFi AP
 scripts/host-start.sh client       # 启动并切到默认客户端
+scripts/host-start.sh router       # 启动并切到移动路由器（需手动指定）
 
 # 一键停止：停进程并清理 nftables / 策略路由 / 由上位机开启的代理
 scripts/host-stop.sh
@@ -305,6 +306,63 @@ cd host && python3 -m pytest -q
 ```
 
 启动前会自动清理上次残留的 nftables 表和策略路由，避免规则叠加导致启动失败；停止时如果代理是上位机开启的，会同时关闭 TUN / TPROXY。网关或热点连接本身保持现状，需要断开时在页面切到「默认客户端」。
+
+### 第四种模式：移动路由器
+
+把本机当成一台"带代理的移动路由器"，**默认不启用，只在你点击「切换」时生效**（三个 NM profile 的 `autoconnect` 固定为 `no`，开机不会自动进入）。
+
+| 接口 | NM 连接 | 网段 / 地址池 | 用途 |
+|---|---|---|---|
+| `enx6c1ff7d02c4a` | `usbnic-router-lan` | 10.10.10.1/24，DHCP .100–.199 | 有线扩展口，直连 Switch 2 底座；接交换机可 1 分 2 同时带 Switch 1/2 |
+| `router_5g_iface`（默认留空＝自动探测） | `usbnic-router-5g` | 10.20.0.1/24，.100–.199 | SSID `Laptop-5G`，ch36 / 80MHz。AX211 实测**无法**起 5G AP，会被判定不可用并跳过 |
+| `wlx6c1ff7f46d6d`（RTL8821CU） | `usbnic-router-24g` | 10.30.0.1/24，.100–.199 | SSID `Laptop-2.4G`，ch6；**默认关闭** |
+
+华为 AX2 Pro 保持原样，只当"有线交换机 + 2.4G 覆盖"：它下游的 LAN 口设备与 2.4G 客户端都落在 `10.10.10.0/24`，随有线整段直连。USB 卡的 2.4G AP 默认关闭（`router_24g_enabled: false`），避免与上游 AP 同频互相压制；profile 与 `10.30.0.0/24` 网段保留，需要时改配置即可启用。
+
+- **密码**复用 `/etc/usbnic/hotspot.pass`；文件缺失时自动生成 24 位强密码并以 0600 落盘。两个 AP 都是 WPA3-SAE + PMF required + 仅 CCMP。
+- **代理分流**：`router_wired_direct: true` 时有线段整段直连（游戏机大流量不被节点限速），两个无线段走代理；`router_direct_cidrs` 可追加直连的单 IP/网段（如 `10.20.0.50/32`）。分流在 nftables 层完成，不依赖 Clash 规则。
+- **多接口 TPROXY**：一条 nft 规则同时覆盖三个下游接口，并用 `counter` 统计命中；面板的 `tproxy_hits` 能区分"规则装上"与"真的命中"，不再出现源地址被改写成 `198.18.0.1` 却显示正常的情况。
+- **降级与回退**：AX211 起不来时只把 5G 标记为降级，有线扩展口和 2.4G 继续可用；有线扩展口启动失败则整体逆序回退（断 AP → 断有线 → 恢复 rfkill 软锁）并自动切回切换前的模式，页面会显示卡在哪一步。
+- **RF 开关**：进入模式时只解锁被软锁的 WLAN 设备并记录 ID，退出时按记录恢复，不影响蓝牙等其它射频。
+
+切换会短暂断开：有线口（Switch 2 会掉线约 10–20 秒，重新 DHCP）、两个 AP 上的设备（需重新关联）。`usbnic-gateway` 与 `usbnic-uplink` 的配置不会被修改。
+
+### 换一张 5G 网卡（新卡到货后）
+
+5G AP 绑哪块网卡由 `router_5g_iface` 决定，留空表示自动挑一块**通过能力探测**的网卡：
+
+1. 先只读确认能力：`GET /api/router/status` 里看 `ap_5g.capability`，或直接看面板模式卡片上的「5G 不可用：原因」。
+2. 插上新卡后取其接口名（如 `wlx0c8268xxxxxx`），改 `host/config/host.yaml`：
+   ```yaml
+   router_5g_iface: wlx0c8268xxxxxx
+   router_5g_channel: 36
+   ```
+3. **先验证再切换**：`curl -s -X POST http://127.0.0.1:8787/api/router/probe`，只起 30 秒 AP，不动当前模式。
+4. 探针 `ap_active: true` 后才切到 router 模式；失败会给出原因（no IR / 驱动不支持 / 固件限制），此时保持 `router_5g_iface: ""` 即回到自动探测，不影响有线扩展口。
+5. 回退：把 `router_5g_iface` 改回 `""`，或直接在页面切回 `gateway`，`teardown_router` 会按逆序断开 AP、恢复 rfkill。
+
+### Switch 2 走有线（本版结论）
+
+**Switch 2（10.10.10.110）底座网线接华为 AX2 Pro 的 LAN 口**，落在 `10.10.10.0/24`，随有线整段直连，不再尝试无线。
+
+原因（本版记录）：
+
+- 家用 AP 的 5G 在 **ch157**（实测 `WuYanWIFI_5G`，5785 MHz，−33 dBm）；
+- 国标（CN 监管域）下，client 类无线芯片（如 RTL8821CU / rtw88）做 AP 只能落在 **149–165**，36–48 属 DFS 且驱动无雷达检测，起不来；
+- 而 **Switch 不认 149–165 这段信道**，所以国标环境下 Switch 的 5G 直连无解。
+
+因此 5G AP 的代码与配置全部保留、默认不启用，等有真正的双频 AP 设备（自带 5G 且信道可控）时再启用；在那之前游戏机一律走有线。
+
+### 移动路由器（router）模式：本版终点状态
+
+| 项目 | 状态 |
+|---|---|
+| 默认启用 | **否**，必须手动在页面切换；三个 profile 均 `autoconnect=no` |
+| 有线扩展口 | **可用**：`enx` → 10.10.10.1/24，NAT/DHCP/DNS，整段直连，可接 Switch 2 底座或交换机 1 分 2 |
+| 代理分流 | **可用**：nftables 层 `bypass_ips` 按 IP 直连，两个无线段走代理；TPROXY 覆盖多接口并用 counter 校验命中 |
+| 5G AP | **不可用**：AX211 无 5G AP 能力（no IR + iwlwifi 固件限制），探测后直接标注原因并跳过 |
+| 2.4G AP | **默认关闭**（避免与上游 AP 同频），`router_24g_enabled` 可开 |
+| 设备速率统计 | 可用：`GET /api/devices/traffic`，页面「设备速率」表格 |
 
 ### 开机自启
 

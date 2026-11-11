@@ -89,6 +89,29 @@
           <span id="chartRange">最近 2 分钟</span>
         </div>
       </section>
+
+      <section class="card device-card">
+        <div class="card-head">
+          <h2>设备速率</h2>
+          <span class="hint" id="deviceMeta">按 IP 统计，含直连与代理</span>
+        </div>
+        <div class="device-table-wrap">
+          <table class="device-table">
+            <thead>
+              <tr>
+                <th>设备</th>
+                <th>IP / MAC</th>
+                <th>下行</th>
+                <th>上行</th>
+                <th>累计 ↓ / ↑</th>
+              </tr>
+            </thead>
+            <tbody id="deviceRateRows">
+              <tr><td colspan="5" class="empty-small">等待采样…</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
     </div>
 
     <section class="card speedtest-panel">
