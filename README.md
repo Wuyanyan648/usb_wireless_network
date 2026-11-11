@@ -473,6 +473,12 @@ hotspot_cidr: 192.168.50.0/24
 home_gateway: 192.168.1.1
 
 clash_tproxy_port: 7896
+
+# TPROXY 永不接管的下游源地址（走有线直连、正在下载的设备）
+tproxy_exclude_ips:
+  - 10.10.10.110
+# 装表后的观察窗口：窗口内下游有流量但 mihomo 侧没有下游连接，自动撤表回滚
+tproxy_verify_seconds: 25
 ```
 
 设备别名通过 `device_aliases`（MAC → 名称）配置；`device_aliases` 里的 MAC 必须是设备当前实际地址，开启「私有 Wi-Fi 地址」后会变化。

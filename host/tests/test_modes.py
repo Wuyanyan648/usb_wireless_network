@@ -49,6 +49,24 @@ def test_tproxy_ruleset_only_hijacks_lan_forwarding() -> None:
     assert "198.18.0.0/16" not in ruleset
 
 
+def test_tproxy_ruleset_excludes_direct_devices() -> None:
+    config = Config(
+        gateway_iface="enx-test",
+        lan_cidr="10.10.10.0/24",
+        clash_tproxy_port=7896,
+        tproxy_exclude_ips=["10.10.10.110"],
+    )
+    ruleset = tproxy_ruleset(config)
+    # 排除规则必须排在 tproxy 之前，才能保证直连设备不被劫持
+    assert ruleset.index("ip saddr { 10.10.10.110 } return") < ruleset.index(
+        "tproxy to :7896"
+    )
+    # 先计数再 tproxy，用于区分"匹配到"和"被接住"
+    assert ruleset.index("meta l4proto { tcp, udp } counter") < ruleset.index(
+        "tproxy to :7896"
+    )
+
+
 def test_tproxy_ruleset_for_hotspot() -> None:
     config = Config(clash_tproxy_port=7896)
     ruleset = tproxy_ruleset(config, "wlx-test", "192.168.50.0/24")

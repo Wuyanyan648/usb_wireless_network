@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import ipaddress
 import json
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -65,6 +67,19 @@ def clash_patch(config: Config, payload: dict[str, Any]) -> dict[str, Any]:
         return {"ok": False, "status": exc.code, "error": f"HTTP {exc.code}"}
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         return {"ok": False, "status": 0, "error": str(exc)}
+
+
+def clash_get(config: Config, path: str) -> dict[str, Any]:
+    """只读取 mihomo 控制口，失败时返回空 dict，不抛异常。"""
+    headers: dict[str, str] = {}
+    if config.clash_secret:
+        headers["Authorization"] = f"Bearer {config.clash_secret}"
+    request = urllib.request.Request(f"{config.clash_api}{path}", headers=headers)
+    try:
+        with urllib.request.urlopen(request, timeout=config.http_timeout) as response:
+            return json.loads(response.read().decode("utf-8", "replace") or "{}")
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError):
+        return {}
 
 
 def set_tun(
@@ -196,11 +211,14 @@ def tproxy_ruleset(
     ifaces: list[str] | None = None,
     cidrs: list[str] | None = None,
     bypass: list[str] | None = None,
+    exclude: list[str] | None = None,
 ) -> str:
     """生成劫持下游 LAN 转发的 nftables 规则（TCP + UDP，保留真实源 IP）。
 
     支持一次覆盖多个下游接口（有线扩展口 + 5G AP + 2.4G AP）。`counter`
     让 `tproxy_status()` 能判断规则是否真的命中，而不只是"表存在"。
+    `exclude` 里的源地址（默认 `tproxy_exclude_ips`）永不接管，用于保护
+    走有线直连、正在大流量下载的设备。
     """
     ifaces = ifaces if ifaces is not None else ([iface] if iface else [config.gateway_iface])
     cidrs = cidrs if cidrs is not None else ([cidr] if cidr else [config.lan_cidr])
@@ -215,6 +233,10 @@ def tproxy_ruleset(
     bypass_rule = (
         f"        ip saddr {{ {', '.join(bypass)} }} return\n" if bypass else ""
     )
+    exclude = [item for item in (exclude or config.tproxy_exclude_ips) if item]
+    exclude_rule = (
+        f"        ip saddr {{ {', '.join(exclude)} }} return\n" if exclude else ""
+    )
     return (
         f"table ip {NFT_TABLE} {{\n"
         "    set lan_nets {\n"
@@ -228,6 +250,10 @@ def tproxy_ruleset(
         "        ip saddr != @lan_nets return\n"
         f"        ip daddr {{ {daddr} }} return\n"
         f"{bypass_rule}"
+        f"{exclude_rule}"
+        # 先统计"匹配到规则"的包，再统计"成功交给 tproxy"的包。
+        # 两者不相等时，说明命中了但套接字没接住（下游会黑洞），据此自动回滚。
+        "        meta l4proto { tcp, udp } counter\n"
         f"        meta l4proto {{ tcp, udp }} tproxy to :{config.clash_tproxy_port} "
         "meta mark set 1 counter accept\n"
         "    }\n"
@@ -248,6 +274,81 @@ def cleanup_tproxy(config: Config, clear_port: bool = False) -> None:
     run(["ip", "route", "flush", "table", TPROXY_ROUTE_TABLE], timeout=3.0)
     if clear_port:
         clash_patch(config, {"tproxy-port": 0})
+
+
+def _tun_enabled(config: Config) -> bool:
+    """读取当前 TUN 开关，用于回滚时还原用户原来的状态。"""
+    body = clash_get(config, "/configs")
+    return bool((body.get("tun") or {}).get("enable"))
+
+
+def _downstream_connections(config: Config) -> int:
+    """统计 mihomo 里源地址属于下游网段的连接数。"""
+    body = clash_get(config, "/connections")
+    try:
+        lan = ipaddress.ip_network(config.lan_cidr, strict=False)
+    except ValueError:
+        return 0
+    count = 0
+    for item in body.get("connections") or []:
+        try:
+            if ipaddress.ip_address(str(item.get("source_ip") or "")) in lan:
+                count += 1
+        except ValueError:
+            continue
+    return count
+
+
+def _rollback_tproxy(config: Config, prev_tun: bool) -> None:
+    """撤表、收口监听，并把 TUN 还原到改动前的状态。"""
+    cleanup_tproxy(config, clear_port=True)
+    clash_patch(config, {"allow-lan": False})
+    if not prev_tun:
+        set_tun(config, False)
+
+
+def _lan_bytes(config: Config) -> int:
+    """下游统计表里的累计字节，用来判断窗口内下游到底有没有流量。"""
+    from . import device_stats
+
+    try:
+        counters = device_stats.read_counters()
+    except Exception:  # noqa: BLE001 - 统计失败不能拖垮回滚判断
+        return 0
+    return sum(int(item.get("rx", 0)) + int(item.get("tx", 0)) for item in counters.values())
+
+
+def verify_tproxy(config: Config, prev_tun: bool) -> dict[str, Any]:
+    """装表后的安全窗口：下游有流量却进不了 mihomo，就立刻自动撤表。
+
+    不能只看 nft 的 counter：隔离环境实测表明，tproxy 没接住包时后面的
+    counter 仍会累加，计数器无法区分"接住了"和"黑洞了"。唯一可靠的信号
+    是 mihomo 的连接表里有没有下游源地址。
+    """
+    window = float(config.tproxy_verify_seconds or 0)
+    if window <= 0:
+        return {"ok": True, "detail": "未启用校验"}
+    lan_before = _lan_bytes(config)
+    deadline = time.monotonic() + window
+    while time.monotonic() < deadline:
+        time.sleep(2.0)
+        if _downstream_connections(config) > 0:
+            return {"ok": True, "detail": "mihomo 已看到下游连接"}
+    lan_delta = _lan_bytes(config) - lan_before
+    if lan_delta > 256 * 1024:
+        _rollback_tproxy(config, prev_tun)
+        return {
+            "ok": False,
+            "rolled_back": True,
+            "detail": (
+                f"窗口内下游有 {lan_delta // 1024} KB 流量，但 mihomo 没有任何下游连接，"
+                "已自动撤表回滚"
+            ),
+        }
+    return {
+        "ok": True,
+        "detail": f"窗口内下游流量仅 {max(lan_delta, 0) // 1024} KB，无法判断，未回滚",
+    }
 
 
 def enable_tproxy(
@@ -276,7 +377,8 @@ def enable_tproxy(
     if not ifaces:
         return {"ok": False, "error": "未配置下游接口", "steps": []}
     steps: list[dict[str, Any]] = []
-
+    # 记录改动前的 TUN 开关，自动回滚时要还原成用户原来的状态
+    prev_tun = _tun_enabled(config)
     # 1) 开启 TUN 代理本机流量，同时打开 TPROXY 端口。
     #    下游转发包会在 prerouting 被 TPROXY 截获，不受 TUN 路由影响。
     clash = clash_patch(
@@ -318,6 +420,7 @@ def enable_tproxy(
         }
     )
     if rc != 0:
+        _rollback_tproxy(config, prev_tun)
         return {"ok": False, "error": err.strip(), "steps": steps}
 
     # 3) 策略路由：把 mark=1 的包交给本地 tproxy 监听
@@ -333,6 +436,7 @@ def enable_tproxy(
         {"name": "ip-rule", "ok": rc == 0, "error": err.strip() if rc != 0 else ""}
     )
     if rc != 0:
+        _rollback_tproxy(config, prev_tun)
         return {"ok": False, "error": err.strip(), "steps": steps}
 
     rc, _out, err = run(
@@ -352,7 +456,26 @@ def enable_tproxy(
     steps.append(
         {"name": "ip-route", "ok": rc == 0, "error": err.strip() if rc != 0 else ""}
     )
-    return {"ok": rc == 0, "error": err.strip() if rc != 0 else "", "steps": steps}
+    if rc != 0:
+        _rollback_tproxy(config, prev_tun)
+        return {"ok": False, "error": err.strip(), "steps": steps}
+
+    # 4) 安全窗口：确认规则真的接住了下游流量，否则立刻撤表回滚
+    verdict = verify_tproxy(config, prev_tun)
+    steps.append(
+        {
+            "name": "verify",
+            "ok": bool(verdict.get("ok")),
+            "detail": str(verdict.get("detail") or ""),
+        }
+    )
+    if not verdict.get("ok"):
+        return {
+            "ok": False,
+            "error": str(verdict.get("detail") or "TPROXY 校验失败"),
+            "steps": steps,
+        }
+    return {"ok": True, "error": "", "steps": steps}
 
 
 def tproxy_status() -> dict[str, Any]:
@@ -367,11 +490,13 @@ def tproxy_status() -> dict[str, Any]:
             "installed": False,
             "rule": False,
             "packets": 0,
+            "matched": 0,
             "bytes": 0,
             "error": (err or out).strip(),
         }
     packets = 0
     packets_bytes = 0
+    matched = 0
     seen_rule = False
     try:
         data = json.loads(out)
@@ -380,20 +505,25 @@ def tproxy_status() -> dict[str, Any]:
             if not rule:
                 continue
             exprs = rule.get("expr") or []
-            if not any(isinstance(expr, dict) and "tproxy" in expr for expr in exprs):
-                continue
-            seen_rule = True
+            has_tproxy = any(isinstance(expr, dict) and "tproxy" in expr for expr in exprs)
             for expr in exprs:
-                if isinstance(expr, dict) and "counter" in expr:
-                    counter = expr.get("counter") or {}
-                    packets += int(counter.get("packets") or 0)
+                if not (isinstance(expr, dict) and "counter" in expr):
+                    continue
+                counter = expr.get("counter") or {}
+                count = int(counter.get("packets") or 0)
+                matched += count
+                if has_tproxy:
+                    packets += count
                     packets_bytes = int(counter.get("bytes") or 0)
+            seen_rule = seen_rule or has_tproxy
         if seen_rule is False:
-            return {"installed": True, "rule": False, "packets": 0, "bytes": 0, "error": ""}
+            return {"installed": True, "rule": False, "packets": 0, "matched": 0,
+                    "bytes": 0, "error": ""}
         return {
             "installed": True,
             "rule": True,
             "packets": packets,
+            "matched": matched,
             "bytes": packets_bytes,
             "error": "",
         }
@@ -402,6 +532,7 @@ def tproxy_status() -> dict[str, Any]:
             "installed": True,
             "rule": False,
             "packets": 0,
+            "matched": 0,
             "bytes": 0,
             "error": str(exc),
         }

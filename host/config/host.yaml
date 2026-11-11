@@ -90,6 +90,14 @@ home_gateway: 192.168.1.1
 clash_tproxy_port: 7896
 clash_redir_port: 7895
 
+# TPROXY 永不接管的源地址：走有线直连、正在大流量下载的设备不能被劫持
+# 例：Switch 2 固定 10.10.10.110；整段直连写 10.10.10.0/24
+tproxy_exclude_ips:
+  - 10.10.10.110
+# 装表后的观察窗口（秒）：窗口内规则未命中且下游有流量，就自动撤表回滚
+# 设为 0 关闭该校验
+tproxy_verify_seconds: 25
+
 # 宽带测速：多线程直连国内镜像，不用 Clash 代理
 # 下载端点可以是任意大文件；测速时用 Range 分片并发拉取
 speedtest_downloads:

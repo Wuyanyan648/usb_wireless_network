@@ -84,6 +84,10 @@ class Config:
     speedtest_max_mb: int = 350
     clash_tproxy_port: int = 7896
     clash_redir_port: int = 7895
+    # TPROXY 永不接管的源地址：走有线直连、正在大流量下载的设备（如 Switch 2）
+    tproxy_exclude_ips: list[str] = field(default_factory=list)
+    # 装表后的观察窗口（秒）：窗口内命中不增长且下游有流量就自动撤表；0 表示不校验
+    tproxy_verify_seconds: float = 25.0
 
     @classmethod
     def load(cls, path: str | Path) -> "Config":
@@ -200,6 +204,12 @@ class Config:
             speedtest_max_mb=int(raw.get("speedtest_max_mb", 350)),
             clash_tproxy_port=int(raw.get("clash_tproxy_port", 7896)),
             clash_redir_port=int(raw.get("clash_redir_port", 7895)),
+            tproxy_exclude_ips=[
+                str(item).strip()
+                for item in (raw.get("tproxy_exclude_ips") or [])
+                if str(item).strip()
+            ],
+            tproxy_verify_seconds=float(raw.get("tproxy_verify_seconds", 25.0)),
         )
         cfg.data_dir.mkdir(parents=True, exist_ok=True)
         return cfg
@@ -247,4 +257,6 @@ class Config:
             "home_gateway": self.home_gateway,
             "clash_tproxy_port": self.clash_tproxy_port,
             "clash_redir_port": self.clash_redir_port,
+            "tproxy_exclude_ips": list(self.tproxy_exclude_ips),
+            "tproxy_verify_seconds": self.tproxy_verify_seconds,
         }
