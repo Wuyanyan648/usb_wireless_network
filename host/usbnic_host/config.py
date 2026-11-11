@@ -6,6 +6,16 @@ from typing import Any
 
 import yaml
 
+from .util import normalize_mac
+
+# 设备级代理策略只有两种：走代理、直连。默认直连，保证装表之外的行为不变。
+POLICIES = ("proxy", "direct")
+
+
+def _policy(value: Any, fallback: str = "direct") -> str:
+    text = str(value or "").strip().lower()
+    return text if text in POLICIES else fallback
+
 
 @dataclass
 class Config:
@@ -88,6 +98,26 @@ class Config:
     tproxy_exclude_ips: list[str] = field(default_factory=list)
     # 装表后的观察窗口（秒）：窗口内命中不增长且下游有流量就自动撤表；0 表示不校验
     tproxy_verify_seconds: float = 25.0
+    # 设备级代理策略：全局默认（direct 保持现有行为），可按 MAC 单独覆盖
+    tproxy_default_policy: str = "direct"
+    # host.yaml 里的初始策略；运行期以 data_dir 下的 JSON 文件为准
+    device_policies: dict[str, str] = field(default_factory=dict)
+    device_policies_file: str = "device_policies.json"
+    # ---------- 使用时长 / 系统健康（并入 usbnicd，不单独起服务） ----------
+    usage_enabled: bool = True
+    # 活动窗口查询间隔（秒）：每次只查一次 _NET_ACTIVE_WINDOW
+    usage_sample_interval: float = 4.0
+    # XScreenSaver 空闲超过这个秒数视为离开，不再计时
+    usage_idle_seconds: float = 300.0
+    # 默认只记录应用名；打开后才把窗口标题写进 app_titles
+    usage_record_window_title: bool = False
+    usage_retention_days: int = 90
+    # 系统健康采样间隔（秒）与保留天数
+    system_health_interval: float = 30.0
+    system_health_retention_days: int = 7
+    # 留空则自动从 who / /run/user/<uid>/gdm/Xauthority 发现
+    usage_x11_display: str = ""
+    usage_x11_authority: str = ""
 
     @classmethod
     def load(cls, path: str | Path) -> "Config":
@@ -210,6 +240,30 @@ class Config:
                 if str(item).strip()
             ],
             tproxy_verify_seconds=float(raw.get("tproxy_verify_seconds", 25.0)),
+            tproxy_default_policy=_policy(raw.get("tproxy_default_policy", "direct")),
+            device_policies={
+                mac: _policy(policy)
+                for mac, policy in (
+                    (normalize_mac(str(key)), value)
+                    for key, value in (raw.get("device_policies") or {}).items()
+                )
+                if mac
+            },
+            device_policies_file=str(
+                raw.get("device_policies_file", "device_policies.json")
+                or "device_policies.json"
+            ),
+            usage_enabled=bool(raw.get("usage_enabled", True)),
+            usage_sample_interval=float(raw.get("usage_sample_interval", 4.0)),
+            usage_idle_seconds=float(raw.get("usage_idle_seconds", 300.0)),
+            usage_record_window_title=bool(raw.get("usage_record_window_title", False)),
+            usage_retention_days=int(raw.get("usage_retention_days", 90)),
+            system_health_interval=float(raw.get("system_health_interval", 30.0)),
+            system_health_retention_days=int(
+                raw.get("system_health_retention_days", 7)
+            ),
+            usage_x11_display=str(raw.get("usage_x11_display", "") or ""),
+            usage_x11_authority=str(raw.get("usage_x11_authority", "") or ""),
         )
         cfg.data_dir.mkdir(parents=True, exist_ok=True)
         return cfg
@@ -259,4 +313,12 @@ class Config:
             "clash_redir_port": self.clash_redir_port,
             "tproxy_exclude_ips": list(self.tproxy_exclude_ips),
             "tproxy_verify_seconds": self.tproxy_verify_seconds,
+            "tproxy_default_policy": self.tproxy_default_policy,
+            "usage_enabled": self.usage_enabled,
+            "usage_sample_interval": self.usage_sample_interval,
+            "usage_idle_seconds": self.usage_idle_seconds,
+            "usage_record_window_title": self.usage_record_window_title,
+            "usage_retention_days": self.usage_retention_days,
+            "system_health_interval": self.system_health_interval,
+            "system_health_retention_days": self.system_health_retention_days,
         }

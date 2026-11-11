@@ -90,13 +90,23 @@ home_gateway: 192.168.1.1
 clash_tproxy_port: 7896
 clash_redir_port: 7895
 
-# TPROXY 永不接管的源地址：走有线直连、正在大流量下载的设备不能被劫持
-# 例：Switch 2 固定 10.10.10.110；整段直连写 10.10.10.0/24
-tproxy_exclude_ips:
-  - 10.10.10.110
+# TPROXY 永不接管的源地址（按 IP 兜底）。设备级策略已能按 MAC 精确控制，
+# 这里只留给"MAC 未知/会变"的设备；整段直连写 10.10.10.0/24。
+tproxy_exclude_ips: []
 # 装表后的观察窗口（秒）：窗口内规则未命中且下游有流量，就自动撤表回滚
 # 设为 0 关闭该校验
 tproxy_verify_seconds: 25
+
+# ---------- 设备级代理管控（按 MAC 决定谁走代理、谁直连） ----------
+# 全局默认策略：direct 表示不改变现有行为；proxy 表示没单独设置的设备默认走代理。
+# 运行期在页面上的修改写入 data_dir/device_policies.json，优先于这里。
+tproxy_default_policy: direct
+# 首次生成策略文件时的初始值（MAC -> proxy / direct），之后以页面设置为准。
+# Switch 2 走代理会让 NAT 类型掉到 F，默认固定直连，需要时在页面手动打开。
+device_policies:
+  "40:44:f7:d8:99:c5": direct
+# 策略文件相对 data_dir；放本地运行目录，不进仓库
+device_policies_file: device_policies.json
 
 # 宽带测速：多线程直连国内镜像，不用 Clash 代理
 # 下载端点可以是任意大文件；测速时用 Range 分片并发拉取
@@ -123,3 +133,22 @@ device_aliases:
   "1e:38:01:58:ff:76": "iPad"
   # 当前有线活动的 Switch 2；被路由器桥接的旧无线接口会自行过期
   "40:44:f7:d8:99:c5": "Nintendo Switch 2"
+
+# ---------- 使用时长 / 系统健康（并入 usbnicd，不单独起服务） ----------
+# 关闭后不再采集前台窗口，但历史数据仍可查询
+usage_enabled: true
+# 活动窗口查询间隔（秒）：每轮只调用一次 xprop，窗口变化时才补查 PID/CLASS
+usage_sample_interval: 4.0
+# XScreenSaver 空闲超过这个秒数视为离开，不计时
+usage_idle_seconds: 300
+# 默认只记录应用名；设为 true 才会把窗口标题写入 app_titles
+usage_record_window_title: false
+# 使用时长按「日期 + 应用」保留的天数（数据库仍在 data_dir/host.db）
+usage_retention_days: 90
+# 系统健康曲线采样间隔（秒）与保留天数
+system_health_interval: 30.0
+system_health_retention_days: 7
+# 留空自动发现登录会话的 X11 凭据（who + /run/user/<uid>/gdm/Xauthority）；
+# 只有自动发现失败时才需要手动填，例如 ":0" 与 "/run/user/1000/gdm/Xauthority"
+usage_x11_display: ""
+usage_x11_authority: ""

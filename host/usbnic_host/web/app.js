@@ -38,6 +38,16 @@ const state = {
   throughputTimer: null,
   throughputChart: null,
   throughputSignatures: "",
+  usage: null,
+  usageTrend: null,
+  systemHealth: null,
+  usageTimer: null,
+  usageTrendTimer: null,
+  systemHealthTimer: null,
+  usageTrendChart: null,
+  systemHealthChart: null,
+  devicePolicies: null,
+  policyBusy: false,
 };
 
 const $ = (id) => document.getElementById(id);
@@ -157,16 +167,19 @@ async function refresh() {
   if (state.busy) return;
   state.busy = true;
   try {
-    const [status, events, rates] = await Promise.all([
+    const [status, events, rates, policies] = await Promise.all([
       fetchJSON("/api/status"),
       fetchJSON("/api/events?limit=40"),
       fetchJSON("/api/devices/traffic").catch(() => ({ items: [] })),
+      fetchJSON("/api/devices/policies").catch(() => null),
     ]);
     state.status = status;
     state.lastStatusAt = Date.now();
+    if (policies) state.devicePolicies = policies;
     setService(true);
     renderAll(status, events.items || []);
     renderDeviceRates(rates);
+    renderPolicyDefault();
     setText("lastUpdate", `更新于 ${fmtTime(status.ts)}`);
   } catch (error) {
     setService(false);
@@ -958,8 +971,98 @@ function renderDevices(status) {
     }
     row.appendChild(proxyCell);
 
+    row.appendChild(renderPolicyCell(item));
+
     row.appendChild(el("td", "num muted", online ? "刚刚" : fmtAgo(item.last_seen)));
     tbody.appendChild(row);
+  }
+}
+
+function policyFor(mac) {
+  const data = state.devicePolicies || {};
+  const found = (data.items || []).find((row) => row.mac === mac);
+  if (found) return found;
+  return {
+    policy: data.default || "direct",
+    effective: "direct",
+    active: Boolean(data.active),
+  };
+}
+
+function renderPolicyCell(item) {
+  const cell = el("td", "policy-cell");
+  if (!item.mac) {
+    cell.textContent = "—";
+    return cell;
+  }
+  const info = policyFor(item.mac);
+  const next = info.policy === "proxy" ? "direct" : "proxy";
+  const button = el(
+    "button",
+    `policy-toggle ${info.policy === "proxy" ? "proxy" : "direct"}`,
+    info.policy === "proxy" ? "走代理" : "直连"
+  );
+  button.type = "button";
+  button.title = "点击切换为" + (next === "proxy" ? "走代理" : "直连");
+  button.disabled = state.policyBusy;
+  button.addEventListener("click", () => setDevicePolicy(item.mac, next));
+  cell.appendChild(button);
+  let hint = "未启用代理";
+  if (info.active) hint = info.effective === "proxy" ? "已走代理" : "直连中";
+  else if (info.policy === "proxy") hint = "代理未接管";
+  cell.appendChild(el("div", "cell-sub", hint));
+  return cell;
+}
+
+function renderPolicyDefault() {
+  const box = $("policyDefault");
+  if (!box) return;
+  const current = (state.devicePolicies || {}).default || "direct";
+  box.querySelectorAll("button").forEach((button) => {
+    button.classList.toggle("active", button.dataset.policy === current);
+    button.disabled = state.policyBusy;
+  });
+}
+
+async function setDevicePolicy(mac, policy) {
+  if (state.policyBusy) return;
+  state.policyBusy = true;
+  if (state.status) renderDevices(state.status);
+  try {
+    const response = await fetch("/api/devices/policy", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mac, policy }),
+    });
+    const data = await response.json();
+    if (!data.ok) throw new Error(data.error || "设置失败");
+    state.devicePolicies = data;
+  } catch (error) {
+    alert(`设备代理策略设置失败: ${error.message}`);
+  } finally {
+    state.policyBusy = false;
+    await refresh();
+  }
+}
+
+async function setDefaultPolicy(policy) {
+  if (state.policyBusy) return;
+  state.policyBusy = true;
+  renderPolicyDefault();
+  try {
+    const response = await fetch("/api/devices/policy/default", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ policy }),
+    });
+    const data = await response.json();
+    if (!data.ok) throw new Error(data.error || "设置失败");
+    state.devicePolicies = data;
+  } catch (error) {
+    alert(`默认代理策略设置失败: ${error.message}`);
+  } finally {
+    state.policyBusy = false;
+    await refresh();
   }
 }
 
@@ -1680,6 +1783,9 @@ class SpeedTrend {
 
 // ---------- 网口实时吞吐 ----------
 const THROUGHPUT_POLL_MS = 1000;
+const USAGE_POLL_MS = 10000;
+const USAGE_TREND_POLL_MS = 60000;
+const SYSTEM_HEALTH_POLL_MS = 30000;
 
 function throughputPair(rx, tx) {
   return `↓ ${fmtNum(rx)} · ↑ ${fmtNum(tx)}`;
@@ -1888,6 +1994,399 @@ class ThroughputChart {
   }
 }
 
+// ---------- 使用时长与系统健康 ----------
+
+function fmtUsageDuration(seconds) {
+  const n = Math.max(0, Number(seconds) || 0);
+  if (n < 60) return `${Math.round(n)}s`;
+  if (n < 3600) return `${Math.floor(n / 60)}m`;
+  return `${Math.floor(n / 3600)}h ${Math.floor((n % 3600) / 60)}m`;
+}
+
+function usageEmpty(message) {
+  return el("div", "empty-small", message);
+}
+
+function renderUsage(data) {
+  state.usage = data;
+  const enabled = data.enabled !== false;
+  const x11 = data.x11 || {};
+  const available = x11.available !== false;
+
+  setText("usageMeta", data.note || "按前台窗口统计");
+  let stateText = "采样中";
+  if (!enabled) stateText = "采集未启用";
+  else if (!available) stateText = "X11 不可用";
+  else if (data.idle) stateText = data.idle_reason ? `空闲 · ${data.idle_reason}` : "空闲";
+  else stateText = `采样中 · 每 ${fmtNum(data.sample_interval, 0)}s`;
+  setText("usageState", stateText);
+
+  setText("usageTotal", fmtUsageDuration(data.total_seconds || 0));
+
+  const current = data.current;
+  if (current) {
+    const running = current.since ? Date.now() / 1000 - current.since : 0;
+    setText("usageCurrent", `当前：${current.app}${running > 0 ? ` · ${fmtUsageDuration(running)}` : ""}`);
+  } else {
+    setText("usageCurrent", data.idle ? "当前空闲" : "—");
+  }
+
+  const list = $("usageList");
+  if (!list) return;
+  const items = data.items || [];
+  if (!items.length) {
+    const reason = !enabled
+      ? "使用时长采集未启用"
+      : !available
+        ? (x11.error || "X11 不可用，暂时无法记录前台应用")
+        : "今天还没有前台使用记录";
+    list.replaceChildren(usageEmpty(reason));
+    return;
+  }
+  const rows = items.slice(0, 10).map((item) => {
+    const row = el("div", "usage-row");
+    const head = el("div", "usage-row-head");
+    head.appendChild(el("span", "usage-app", item.app));
+    head.appendChild(
+      el("span", "usage-time", `${fmtUsageDuration(item.seconds)} · ${fmtNum(item.percent, 1)}%`)
+    );
+    row.appendChild(head);
+    const bar = el("div", "usage-bar");
+    const fill = el("i");
+    fill.style.width = `${Math.max(1.5, Math.min(100, Number(item.percent) || 0))}%`;
+    bar.appendChild(fill);
+    row.appendChild(bar);
+    return row;
+  });
+  list.replaceChildren(...rows);
+}
+
+function renderUsageTrend(data) {
+  state.usageTrend = data;
+  setText(
+    "usageTrendMeta",
+    data.total_seconds
+      ? `${data.days} 天 · ${fmtUsageDuration(data.total_seconds)}`
+      : `${data.days} 天`
+  );
+  if (state.usageTrendChart) state.usageTrendChart.setData(data.items || []);
+
+  const host = $("usageTopApps");
+  if (!host) return;
+  const apps = data.apps || [];
+  if (!apps.length) {
+    host.replaceChildren(usageEmpty("还没有使用记录"));
+    return;
+  }
+  host.replaceChildren(
+    ...apps.slice(0, 5).map((item) => {
+      const row = el("div", "usage-app-row");
+      row.appendChild(el("span", "usage-app", item.app));
+      row.appendChild(
+        el("span", "usage-time", `${fmtUsageDuration(item.seconds)} · ${fmtNum(item.percent, 1)}%`)
+      );
+      return row;
+    })
+  );
+}
+
+function renderSystemHealth(data) {
+  state.systemHealth = data;
+  const latest = data.latest || {};
+  const has = (value) => value !== null && value !== undefined && Number.isFinite(Number(value));
+  setText("healthCpu", has(latest.cpu_pct) ? `${fmtNum(latest.cpu_pct, 0)}%` : "—");
+  setText("healthMem", has(latest.mem_pct) ? `${fmtNum(latest.mem_pct, 0)}%` : "—");
+  setText("healthSwap", has(latest.swap_pct) ? `${fmtNum(latest.swap_pct, 0)}%` : "—");
+  setText("healthDisk", latest.disk_total ? `${fmtBytes(latest.disk_free)} 可用` : "—");
+  setText("healthTemp", has(latest.temp_c) ? `${fmtNum(latest.temp_c, 1)} °C` : "无传感器");
+  setText(
+    "systemHealthMeta",
+    `每 ${fmtNum(data.interval, 0)}s · 最近 ${fmtNum(data.hours, 0)}h`
+  );
+  if (state.systemHealthChart) {
+    state.systemHealthChart.setData(data.points || [], data.hours || 6);
+  }
+}
+
+async function refreshUsage() {
+  if (!document.hidden) {
+    try {
+      renderUsage(await fetchJSON("/api/usage"));
+    } catch (error) {
+      setText("usageState", "使用时长读取失败");
+    }
+  }
+  if (state.usageTimer) clearTimeout(state.usageTimer);
+  state.usageTimer = setTimeout(refreshUsage, document.hidden ? HIDDEN_POLL_MS : USAGE_POLL_MS);
+}
+
+async function refreshUsageTrend() {
+  if (!document.hidden) {
+    try {
+      renderUsageTrend(await fetchJSON("/api/usage/trend?days=7"));
+    } catch (error) {
+      setText("usageTrendMeta", "趋势读取失败");
+    }
+  }
+  if (state.usageTrendTimer) clearTimeout(state.usageTrendTimer);
+  state.usageTrendTimer = setTimeout(
+    refreshUsageTrend,
+    document.hidden ? HIDDEN_POLL_MS : USAGE_TREND_POLL_MS
+  );
+}
+
+async function refreshSystemHealth() {
+  if (!document.hidden) {
+    try {
+      renderSystemHealth(await fetchJSON("/api/system/health?hours=6"));
+    } catch (error) {
+      setText("systemHealthMeta", "健康曲线读取失败");
+    }
+  }
+  if (state.systemHealthTimer) clearTimeout(state.systemHealthTimer);
+  state.systemHealthTimer = setTimeout(
+    refreshSystemHealth,
+    document.hidden ? HIDDEN_POLL_MS : SYSTEM_HEALTH_POLL_MS
+  );
+}
+
+class UsageTrendChart {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext("2d");
+    this.items = [];
+    this.width = 0;
+    this.height = 0;
+    this.resize = this.resize.bind(this);
+    window.addEventListener("resize", this.resize);
+    if (window.ResizeObserver) new ResizeObserver(this.resize).observe(canvas.parentElement);
+    this.resize();
+  }
+
+  setData(items) {
+    this.items = (items || []).slice(-14);
+    this.draw();
+  }
+
+  resize() {
+    const parent = this.canvas.parentElement;
+    if (!parent) return;
+    const rect = parent.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    this.canvas.width = Math.max(1, Math.floor(rect.width * dpr));
+    this.canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+    this.canvas.style.width = `${rect.width}px`;
+    this.canvas.style.height = `${rect.height}px`;
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.width = rect.width;
+    this.height = rect.height;
+    this.draw();
+  }
+
+  draw() {
+    const ctx = this.ctx;
+    if (!ctx || !this.width || !this.height) return;
+    ctx.clearRect(0, 0, this.width, this.height);
+    const styles = getComputedStyle(document.documentElement);
+    const accent = styles.getPropertyValue("--accent").trim() || "#5b8cff";
+    const rxColor = styles.getPropertyValue("--rx").trim() || "#41d1c4";
+    const gridColor = styles.getPropertyValue("--border-soft").trim() || "#1a2332";
+    const faint = styles.getPropertyValue("--faint").trim() || "#5d687b";
+    const muted = styles.getPropertyValue("--muted").trim() || "#8e99ad";
+
+    if (!this.items.length) {
+      ctx.fillStyle = faint;
+      ctx.font = '12px "PingFang SC", system-ui, sans-serif';
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("等待使用数据", this.width / 2, this.height / 2);
+      return;
+    }
+
+    const padding = { left: 46, right: 10, top: 14, bottom: 22 };
+    const plotWidth = Math.max(10, this.width - padding.left - padding.right);
+    const plotHeight = Math.max(10, this.height - padding.top - padding.bottom);
+    const maxValue = Math.max(1, ...this.items.map((item) => Number(item.seconds) || 0));
+    const niceMax = niceNumber(maxValue);
+    const yFor = (value) => padding.top + plotHeight * (1 - value / niceMax);
+
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = gridColor;
+    ctx.fillStyle = muted;
+    ctx.font = '11px "JetBrains Mono", ui-monospace, monospace';
+    ctx.textAlign = "right";
+    ctx.textBaseline = "middle";
+    for (let step = 0; step <= 3; step += 1) {
+      const value = (niceMax / 3) * step;
+      const y = yFor(value);
+      ctx.beginPath();
+      ctx.moveTo(padding.left, y);
+      ctx.lineTo(this.width - padding.right, y);
+      ctx.stroke();
+      ctx.fillText(fmtUsageDuration(value), padding.left - 8, y);
+    }
+
+    const slot = plotWidth / this.items.length;
+    const barWidth = Math.max(4, slot * 0.56);
+    this.items.forEach((item, index) => {
+      const value = Math.max(0, Number(item.seconds) || 0);
+      const x = padding.left + slot * (index + 0.5);
+      const height = Math.max(value > 0 ? 2 : 1, (value / niceMax) * plotHeight);
+      ctx.fillStyle = index === this.items.length - 1 ? rxColor : accent;
+      ctx.globalAlpha = value > 0 ? 0.9 : 0.25;
+      ctx.fillRect(x - barWidth / 2, padding.top + plotHeight - height, barWidth, height);
+      ctx.globalAlpha = 1;
+      if (this.items.length <= 8 || index % 2 === 0) {
+        ctx.fillStyle = muted;
+        ctx.font = '10px "JetBrains Mono", ui-monospace, monospace';
+        ctx.textAlign = "center";
+        ctx.textBaseline = "top";
+        ctx.fillText(item.label || "", x, this.height - 17);
+      }
+    });
+  }
+}
+
+class SystemHealthChart {
+  constructor(canvas) {
+    this.canvas = canvas;
+    this.ctx = canvas.getContext("2d");
+    this.points = [];
+    this.hours = 6;
+    this.width = 0;
+    this.height = 0;
+    this.resize = this.resize.bind(this);
+    window.addEventListener("resize", this.resize);
+    if (window.ResizeObserver) new ResizeObserver(this.resize).observe(canvas.parentElement);
+    this.resize();
+  }
+
+  setData(points, hours) {
+    this.points = points || [];
+    this.hours = hours || 6;
+    this.draw();
+  }
+
+  resize() {
+    const parent = this.canvas.parentElement;
+    if (!parent) return;
+    const rect = parent.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+    this.canvas.width = Math.max(1, Math.floor(rect.width * dpr));
+    this.canvas.height = Math.max(1, Math.floor(rect.height * dpr));
+    this.canvas.style.width = `${rect.width}px`;
+    this.canvas.style.height = `${rect.height}px`;
+    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    this.width = rect.width;
+    this.height = rect.height;
+    this.draw();
+  }
+
+  draw() {
+    const ctx = this.ctx;
+    if (!ctx || !this.width || !this.height) return;
+    ctx.clearRect(0, 0, this.width, this.height);
+    const styles = getComputedStyle(document.documentElement);
+    const accent = styles.getPropertyValue("--accent").trim() || "#5b8cff";
+    const rxColor = styles.getPropertyValue("--rx").trim() || "#41d1c4";
+    const accent2 = styles.getPropertyValue("--accent-2").trim() || "#8a6cff";
+    const yellow = styles.getPropertyValue("--yellow").trim() || "#f5b84b";
+    const gridColor = styles.getPropertyValue("--border-soft").trim() || "#1a2332";
+    const faint = styles.getPropertyValue("--faint").trim() || "#5d687b";
+    const muted = styles.getPropertyValue("--muted").trim() || "#8e99ad";
+
+    if (!this.points.length) {
+      ctx.fillStyle = faint;
+      ctx.font = '12px "PingFang SC", system-ui, sans-serif';
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("等待健康采样", this.width / 2, this.height / 2);
+      return;
+    }
+
+    const padding = { left: 44, right: 44, top: 14, bottom: 22 };
+    const plotWidth = Math.max(10, this.width - padding.left - padding.right);
+    const plotHeight = Math.max(10, this.height - padding.top - padding.bottom);
+    const temps = this.points
+      .map((item) => Number(item.temp_c))
+      .filter((value) => Number.isFinite(value));
+    const tempMax = Math.max(60, Math.ceil(Math.max(0, ...temps) / 10) * 10 || 100);
+    const start = this.points[0].ts;
+    const end = this.points[this.points.length - 1].ts;
+    const span = Math.max(1, end - start);
+    const xFor = (ts) => padding.left + Math.min(1, Math.max(0, (ts - start) / span)) * plotWidth;
+    const yForPct = (value) => padding.top + plotHeight * (1 - Math.min(100, Math.max(0, value)) / 100);
+    const yForTemp = (value) =>
+      padding.top + plotHeight * (1 - Math.min(tempMax, Math.max(0, value)) / tempMax);
+
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = gridColor;
+    ctx.font = '10px "JetBrains Mono", ui-monospace, monospace';
+    ctx.textBaseline = "middle";
+    for (let step = 0; step <= 4; step += 1) {
+      const y = padding.top + plotHeight * (1 - step / 4);
+      ctx.beginPath();
+      ctx.moveTo(padding.left, y);
+      ctx.lineTo(this.width - padding.right, y);
+      ctx.stroke();
+      ctx.fillStyle = muted;
+      ctx.textAlign = "right";
+      ctx.fillText(`${step * 25}%`, padding.left - 8, y);
+      ctx.fillStyle = yellow;
+      ctx.textAlign = "left";
+      ctx.fillText(`${Math.round((tempMax * step) / 4)}°`, this.width - padding.right + 6, y);
+    }
+
+    const series = (key, color, axis, dashed = false) => {
+      ctx.beginPath();
+      let started = false;
+      this.points.forEach((item) => {
+        const value = Number(item[key]);
+        if (!Number.isFinite(value)) {
+          started = false;
+          return;
+        }
+        const x = xFor(item.ts);
+        const y = axis(value);
+        if (!started) {
+          ctx.moveTo(x, y);
+          started = true;
+        } else {
+          ctx.lineTo(x, y);
+        }
+      });
+      ctx.setLineDash(dashed ? [4, 4] : []);
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1.8;
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
+      ctx.stroke();
+      ctx.setLineDash([]);
+      const last = this.points[this.points.length - 1];
+      const value = Number(last[key]);
+      if (Number.isFinite(value)) {
+        ctx.beginPath();
+        ctx.arc(xFor(last.ts), axis(value), 2.4, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
+      }
+    };
+
+    series("cpu_pct", accent, yForPct);
+    series("mem_pct", rxColor, yForPct);
+    series("swap_pct", accent2, yForPct, true);
+    series("temp_c", yellow, yForTemp, true);
+
+    ctx.fillStyle = muted;
+    ctx.font = '11px "JetBrains Mono", ui-monospace, monospace';
+    ctx.textBaseline = "top";
+    ctx.textAlign = "left";
+    ctx.fillText(`${fmtNum(this.hours, 0)}h 前`, padding.left, this.height - 17);
+    ctx.textAlign = "right";
+    ctx.fillText("现在", this.width - padding.right, this.height - 17);
+  }
+}
+
 async function toggleProxy() {
   const button = $("proxyToggle");
   if (!button || state.proxyBusy) return;
@@ -1934,6 +2433,14 @@ function bindFilters() {
       if (state.status) renderDevices(state.status);
     });
   }
+
+  const defaultPolicy = $("policyDefault");
+  if (defaultPolicy) {
+    defaultPolicy.addEventListener("click", (event) => {
+      const button = event.target.closest("button[data-policy]");
+      if (button) setDefaultPolicy(button.dataset.policy);
+    });
+  }
 }
 
 function init() {
@@ -1941,6 +2448,8 @@ function init() {
   state.speedtestChart = new SpeedChart($("speedChart"));
   state.speedtestTrend = new SpeedTrend($("speedTrend"));
   state.throughputChart = new ThroughputChart($("throughputChart"));
+  state.usageTrendChart = new UsageTrendChart($("usageTrendChart"));
+  state.systemHealthChart = new SystemHealthChart($("systemHealthChart"));
   const speedtestButton = $("speedtestStart");
   if (speedtestButton) speedtestButton.addEventListener("click", startSpeedtest);
   const throughputSelect = $("throughputIface");
@@ -1978,6 +2487,9 @@ function init() {
   refreshHotspot();
   refreshSpeedtest();
   refreshThroughput();
+  refreshUsage();
+  refreshUsageTrend();
+  refreshSystemHealth();
   setInterval(refreshProxies, PROXY_POLL_MS);
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden) {
@@ -1987,6 +2499,9 @@ function init() {
       refreshHotspot();
       refreshSpeedtest();
       refreshThroughput();
+      refreshUsage();
+      refreshUsageTrend();
+      refreshSystemHealth();
     }
     // 前后台切换后按新的节拍重新排期（前台 2s / 后台 15s）
     scheduleRefresh();

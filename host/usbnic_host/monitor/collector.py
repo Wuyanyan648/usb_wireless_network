@@ -17,6 +17,8 @@ from .health import HealthChecker
 from .proxy import tproxy_status
 from .sources import get_clash, get_dhcp_leases, get_neigh, get_wifi_stations
 from .storage import Storage
+from .system_health import SystemHealthMonitor
+from .usage import UsageMonitor
 
 
 class Monitor:
@@ -38,15 +40,23 @@ class Monitor:
         self.device_tracker = DeviceTracker(offline_after=600.0)
         self.health_checker = HealthChecker(config)
         self.storage = Storage(config)
+        # 使用时长 / 系统健康并入 usbnicd，随 Monitor 启停，不单独起服务
+        self.usage = UsageMonitor(config, self.storage)
+        self.system_health = SystemHealthMonitor(config, self.storage)
 
     def start(self) -> None:
         self.storage.init()
         self.storage.add_event("info", "上位机服务启动")
+        self.system_health.start()
+        if self.config.usage_enabled:
+            self.usage.start()
         self._thread.start()
 
     def stop(self) -> None:
         self._stop.set()
         self._thread.join(timeout=3.0)
+        self.usage.stop()
+        self.system_health.stop()
         self.storage.close()
 
     def snapshot(self) -> dict[str, Any]:

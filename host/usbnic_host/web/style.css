@@ -715,6 +715,39 @@ input {
   border-color: color-mix(in srgb, var(--red) 32%, var(--border));
 }
 
+.policy-cell {
+  white-space: nowrap;
+}
+
+.policy-toggle {
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 3px 10px;
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.policy-toggle:hover:not(:disabled) {
+  color: var(--text);
+}
+
+.policy-toggle.proxy {
+  color: var(--tx);
+  border-color: color-mix(in srgb, var(--tx) 42%, var(--border));
+  background: color-mix(in srgb, var(--tx) 12%, var(--panel-2));
+}
+
+.policy-toggle.direct {
+  color: var(--muted);
+}
+
+.policy-toggle:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
 .chain-list {
   display: flex;
   flex-wrap: wrap;
@@ -1573,4 +1606,207 @@ button.proxy-node:disabled {
   }
 }
 
+/* ---------- 使用时长与系统健康 ---------- */
+.usage-panel {
+  margin-top: 16px;
+}
 
+.usage-grid {
+  display: grid;
+  grid-template-columns: 1.05fr 1fr 1.15fr;
+  gap: 14px;
+}
+
+.usage-block {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+}
+
+.usage-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 10px;
+}
+
+.usage-total {
+  margin-top: 2px;
+  font-family: var(--mono);
+  font-size: 26px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.usage-current {
+  max-width: 52%;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 11px;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.usage-list,
+.usage-apps {
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.usage-row,
+.usage-app-row {
+  min-width: 0;
+}
+
+.usage-row-head,
+.usage-app-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.usage-app {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text);
+}
+
+.usage-time {
+  flex: none;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+}
+
+.usage-bar {
+  height: 5px;
+  margin-top: 5px;
+  border-radius: 999px;
+  background: var(--border-soft);
+  overflow: hidden;
+}
+
+.usage-bar i {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, var(--accent), var(--rx));
+}
+
+.usage-subhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 8px;
+}
+
+.usage-subhead h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.usage-trend-wrap {
+  height: 150px;
+  min-height: 130px;
+}
+
+.usage-apps {
+  padding-top: 10px;
+}
+
+.health-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 6px;
+  padding-bottom: 8px;
+}
+
+.health-metric {
+  min-width: 0;
+  padding: 6px 7px;
+  border: 1px solid var(--border-soft);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.health-metric span {
+  display: block;
+  color: var(--faint);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.health-metric strong {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.health-legend {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 4px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.legend-dot.usage-cpu {
+  background: var(--accent);
+}
+
+.legend-dot.usage-swap {
+  background: var(--accent-2);
+}
+
+.legend-dot.usage-temp {
+  background: var(--yellow);
+}
+
+.system-health-wrap {
+  height: 150px;
+  min-height: 130px;
+}
+
+@media (max-width: 1200px) {
+  .usage-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .usage-block:last-child {
+    grid-column: span 2;
+  }
+}
+
+@media (max-width: 760px) {
+  .usage-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .usage-block:last-child {
+    grid-column: auto;
+  }
+
+  .health-metrics {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}

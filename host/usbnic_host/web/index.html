@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>usbnic 上位机 · 网络控制</title>
-  <link rel="stylesheet" href="/static/style.css?v=20261111">
+  <link rel="stylesheet" href="/static/style.css?v=20261112">
 </head>
 <body>
   <div class="app">
@@ -54,6 +54,62 @@
         <div class="stat-value" id="statThroughput">--</div>
         <div class="stat-sub" id="statThroughputSub">--</div>
       </article>
+    </section>
+
+    <section class="card usage-panel">
+      <div class="card-head">
+        <div>
+          <h2>使用时长与健康</h2>
+          <span class="hint" id="usageMeta">按前台窗口统计 · 默认只记录应用名，不记录窗口标题</span>
+        </div>
+        <span class="hint" id="usageState">--</span>
+      </div>
+      <div class="usage-grid">
+        <div class="usage-block">
+          <div class="usage-head">
+            <div>
+              <div class="stat-label">今日前台使用</div>
+              <div class="usage-total" id="usageTotal">—</div>
+            </div>
+            <div class="usage-current" id="usageCurrent">—</div>
+          </div>
+          <div class="usage-list" id="usageList">
+            <div class="empty-small">等待采样…</div>
+          </div>
+        </div>
+
+        <div class="usage-block">
+          <div class="usage-subhead">
+            <h3>近 7 天</h3>
+            <span class="hint" id="usageTrendMeta">--</span>
+          </div>
+          <div class="chart-wrap usage-trend-wrap"><canvas id="usageTrendChart"></canvas></div>
+          <div class="usage-apps" id="usageTopApps">
+            <div class="empty-small">还没有使用记录</div>
+          </div>
+        </div>
+
+        <div class="usage-block">
+          <div class="usage-subhead">
+            <h3>系统健康</h3>
+            <span class="hint" id="systemHealthMeta">--</span>
+          </div>
+          <div class="health-metrics">
+            <div class="health-metric"><span>CPU</span><strong id="healthCpu">—</strong></div>
+            <div class="health-metric"><span>内存</span><strong id="healthMem">—</strong></div>
+            <div class="health-metric"><span>Swap</span><strong id="healthSwap">—</strong></div>
+            <div class="health-metric"><span>磁盘可用</span><strong id="healthDisk">—</strong></div>
+            <div class="health-metric"><span>温度</span><strong id="healthTemp">—</strong></div>
+          </div>
+          <div class="health-legend">
+            <span class="legend-item"><i class="legend-dot usage-cpu"></i>CPU</span>
+            <span class="legend-item"><i class="legend-dot rx"></i>内存</span>
+            <span class="legend-item"><i class="legend-dot usage-swap"></i>Swap</span>
+            <span class="legend-item"><i class="legend-dot usage-temp"></i>温度</span>
+          </div>
+          <div class="chart-wrap system-health-wrap"><canvas id="systemHealthChart"></canvas></div>
+        </div>
+      </div>
     </section>
 
     <div class="grid-main">
@@ -277,6 +333,10 @@
       <div class="card-head">
         <h2>连接设备</h2>
         <div class="table-tools">
+          <div class="segmented" id="policyDefault" title="没单独设置的设备使用这个默认策略">
+            <button data-policy="direct" type="button">默认直连</button>
+            <button data-policy="proxy" type="button">默认代理</button>
+          </div>
           <div class="segmented" id="deviceFilter">
             <button data-filter="all" class="active" type="button">全部</button>
             <button data-filter="online" type="button">在线</button>
@@ -301,6 +361,7 @@
               <th class="num">速率</th>
               <th class="num">流量</th>
               <th>代理链路</th>
+              <th>代理策略</th>
               <th class="num">最后在线</th>
             </tr>
           </thead>
@@ -336,6 +397,6 @@
     </footer>
   </div>
 
-  <script src="/static/app.js?v=20261111"></script>
+  <script src="/static/app.js?v=20261112"></script>
 </body>
 </html>

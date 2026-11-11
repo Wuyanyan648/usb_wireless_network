@@ -424,6 +424,35 @@ TPROXY 只匹配配置中的下游接口与网段，LAN 互访和上游光猫网
 
 开启代理时会先检查 Clash 内核：已运行就直接复用；未运行则通过 Clash Verge 的 root 服务自动拉起（`clash_service_api`），所以开机后不需要手动打开 Clash。服务不可用时会尝试直接启动 `verge-mihomo`。
 
+#### 设备级代理管控（谁走代理、谁直连）
+
+设备列表每行新增「代理策略」开关，配合表头的「默认直连 / 默认代理」，按 **MAC** 决定单台设备走代理还是直连，IP 只是 ARP / DHCP 租约给出的瞬时映射：
+
+| 功能 | 接口 |
+| --- | --- |
+| 设备策略列表（含当前生效状态） | `GET /api/devices/policies` |
+| 设置单台设备 | `PUT /api/devices/policy`，body `{"mac": "aa:bb:cc:dd:ee:ff", "policy": "proxy"}` |
+| 设置全局默认 | `PUT /api/devices/policy/default`，body `{"policy": "direct"}` |
+
+- 策略只有 `proxy` / `direct` 两种，全局默认是 `direct`（不改变现有行为）。页面上的修改写入 `data_dir/device_policies.json`，优先于 `host.yaml` 的初始值。
+- 底层是 nft 集合：`proxy_nets` 放"走代理"设备的当前 IP，`direct_nets` 放显式直连的 IP。规则顺序固定为 `直连集合 → 白名单 → tproxy`，直连设备永不被劫持。
+- ARP / DHCP 租约变化时，吞吐采样线程每 10 秒刷新一次集合，DHCP 换 IP 不会把策略带错。
+- 没有任何设备选择走代理时**不装表**，只开 TUN，下游保持普通 NAT。
+- 撤销：页面点回「直连」并把默认改回「直连」，程序会自动撤表；或 `sudo python3 -m usbnic_host.cleanup`。
+
+**两处已知根因的处理**：
+
+1. `net.ipv4.conf.all.src_valid_mark` 被 Tailscale 写成 1 时，TPROXY 标记过的转发包会在反向路径校验里被判 martian 静默丢弃（nft 命中数上涨、mihomo 没有任何下游连接）。现在装表前临时置 0 并复核，撤表后恢复原值；若装表瞬间又被改回 1，会直接拒绝装表并报错，不再硬装。
+2. 透明套接字必须是 IPv4。mihomo 默认 `bind-address: *` 会起双栈监听，IPv4 的 tproxy 查找找不到带 `IP_TRANSPARENT` 的 v4 套接字（mihomo#3098）。现在装表时把 `bind-address` 临时改成 `0.0.0.0`，并用 `ss` 校验 7896 确实绑在 `0.0.0.0`；校验不过就放弃装表并恢复原配置，避免再次把下游打成黑洞。
+
+TPROXY 的 `fwmark 1` 规则显式使用 `pref 100`，排在 mihomo TUN 的 `9000/9001/9002` 之前，防止标记包被 TUN 的 table 2022 先一步抢走。
+
+装表期间 `allow-lan=true` 且 `bind-address=0.0.0.0`，7896/7897/9097 会对下游可见（TPROXY 需要）。关代理或撤表时会恢复 `bind-address` 原值并把 `allow-lan` 关掉；上游光猫网段与 LAN 互访始终直连。
+
+**隔离验证**：在 `unshare -Urn` 的 netns 里用 veth + 透明套接字验证了「选中 → 投递 → 建连 → 回程」四层（`src_valid_mark=0` 时客户端收到回程数据；置 1 时命中计数照涨但连接超时，复现线上症状）。真机验证仍建议在你在场时进行：装表后 25 秒观察窗口内若下游有流量但 mihomo 没有下游连接，会自动撤表回滚。
+
+**部署 / 撤销**：本次没有新增 systemd 单元，也没有改 `scripts/host-start.sh`；改完代码后 `sudo systemctl restart usbnicd`（或 `sudo scripts/host-start.sh`）即可加载，配置项全部有默认值，旧 `host.yaml` 不用改也能启动。重启会按上次模式重放：代理是否恢复取决于你之前是否手动拨过（见「重启后重放上次模式」）。想彻底撤销设备管控，把默认策略改回「直连」并清空各设备开关，程序会自动撤表；或执行 `sudo python3 -m usbnic_host.cleanup --proxy`。
+
 ### 宽带测速与实时吞吐
 
 面板新增两张卡片，对应接口如下：
@@ -450,6 +479,45 @@ TPROXY 只匹配配置中的下游接口与网段，LAN 互访和上游光猫网
 - **待办：上行测速端点待替换为国内可写接口**（需找到稳定、免鉴权、可接收大体积 POST 的国内端点），替换前上行数值仅作参考。
 - 下行镜像与上传端点均在 `host/config/host.yaml` 的 `speedtest_downloads` / `speedtest_upload_url` 中配置，可自行调整。
 
+### 使用时长与健康监测
+
+面板新增「使用时长与健康」卡片：今日前台应用排行（时长 + 占比）、近 7 天趋势，以及 CPU / 内存 / swap / 温度曲线。
+
+**并入现有服务**：该功能直接跑在 `usbnicd` 进程里（`Monitor` 启停时一起启动 / 停止），**不新增 systemd 单元**，也不需要单独的安装步骤。生产环境改完代码后重启即可：
+
+```bash
+sudo systemctl restart usbnicd
+```
+
+**采集方式**：
+
+- GNOME on **X11**：每 `usage_sample_interval`（默认 4 秒）调用一次 `xprop -root _NET_ACTIVE_WINDOW`；只有窗口 ID 变化时才补一次 `xprop -id ... _NET_WM_PID WM_CLASS`，并按窗口 ID 缓存。PID → `/proc/<pid>/comm` → 易读应用名。
+- 两次采样之间的时间差累加到上一个应用；超过 60 秒的间隔（休眠 / 挂起 / 服务停过）直接丢弃，跨午夜按本地日期拆分。
+- **空闲不计时**：无活动窗口、logind `LockedHint=yes`（锁屏，15 秒检查一次）、XScreenSaver 空闲超过 `usage_idle_seconds`（默认 300 秒），或活动窗口属于 `gnome-shell` / `Xorg` / gdm 等桌面壳层。
+- 系统健康每 `system_health_interval`（默认 30 秒）用 `psutil` 采样一次；温度优先 `coretemp` 的 `Package id 0`，没有 CPU 传感器时退回 nvme 或可用传感器最大值。
+
+**依赖与限制**：
+
+- 需要 `xprop`（Xorg 自带）。不依赖 `xdotool`、`xprintidle` 或 `lm-sensors`；空闲时间通过 `libXss` 的 XScreenSaver 扩展读取。
+- 只支持 **X11** 会话。Wayland 下 `_NET_ACTIVE_WINDOW` 不可用，接口会返回 `x11.available: false` 和具体原因，页面显示「X11 不可用」，不会静默计 0。
+- 以 root 运行的 `usbnicd` 会自动从 `who` 和 `/run/user/<uid>/gdm/Xauthority` 发现登录会话的 X11 凭据；自动发现失败时可手动配置 `usage_x11_display` / `usage_x11_authority`。
+
+**接口**：
+
+| 功能 | 接口 |
+| --- | --- |
+| 今日应用使用排行 + 当前前台应用 + 空闲原因 | `GET /api/usage` |
+| 近 N 天每日总时长与应用汇总 | `GET /api/usage/trend?days=7` |
+| 系统健康最新值与曲线点 | `GET /api/system/health?hours=6&points=240` |
+
+**数据存储与隐私**：
+
+- 全部写入 `data_dir` 下的 `host.db`（开发环境默认 `host/data/host.db`；生产可在 `host.yaml` 把 `data_dir` 指到 `/var/lib/usbnic`）。
+- `app_usage(day, app, seconds)`：按日期 + 应用分桶，默认保留 90 天。
+- `system_health_samples(ts, cpu, mem, swap, disk, temp)`：默认保留 7 天。
+- **默认只记录应用名，不记录窗口标题**；只有把 `usage_record_window_title` 设为 `true` 才会写 `app_titles`。
+- 运行时数据（`host/data/`、`*.db`、`*.log`）已在 `.gitignore` 中排除，不会进入 public 仓库；仓库里只有配置默认值，没有 token / 密码 / 私钥。
+
 ### 配置
 
 配置文件 `host/config/host.yaml`，主要项：
@@ -474,11 +542,27 @@ home_gateway: 192.168.1.1
 
 clash_tproxy_port: 7896
 
-# TPROXY 永不接管的下游源地址（走有线直连、正在下载的设备）
-tproxy_exclude_ips:
-  - 10.10.10.110
+# TPROXY 永不接管的下游源地址（按 IP 兜底，设备级策略已能按 MAC 精确控制）
+tproxy_exclude_ips: []
 # 装表后的观察窗口：窗口内下游有流量但 mihomo 侧没有下游连接，自动撤表回滚
 tproxy_verify_seconds: 25
+
+# 设备级代理策略：默认直连；运行期设置写入 data_dir/device_policies.json
+tproxy_default_policy: direct
+device_policies:                     # 首次生成的初始值（MAC -> proxy/direct）
+  "40:44:f7:d8:99:c5": direct        # Switch 2：代理会掉 NAT 类型，默认直连
+device_policies_file: device_policies.json
+
+# 使用时长 / 系统健康（并入 usbnicd）
+usage_enabled: true
+usage_sample_interval: 4.0        # 活动窗口查询间隔（秒）
+usage_idle_seconds: 300           # 无输入超过 5 分钟不计时
+usage_record_window_title: false  # 默认只记应用名，不记窗口标题
+usage_retention_days: 90
+system_health_interval: 30.0
+system_health_retention_days: 7
+usage_x11_display: ""             # 留空自动发现
+usage_x11_authority: ""           # 留空自动发现
 ```
 
 设备别名通过 `device_aliases`（MAC → 名称）配置；`device_aliases` 里的 MAC 必须是设备当前实际地址，开启「私有 Wi-Fi 地址」后会变化。

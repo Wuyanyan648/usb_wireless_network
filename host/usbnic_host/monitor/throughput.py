@@ -42,6 +42,7 @@ class ThroughputMonitor:
         self._devices: list[dict[str, float]] = []
         self._device_prev: tuple[float, dict[str, tuple[int, int]]] | None = None
         self._device_retry = 0.0
+        self._policy_retry = 0.0
         self._stop = threading.Event()
         self._thread = threading.Thread(
             target=self._loop, name="throughput-monitor", daemon=True
@@ -140,6 +141,8 @@ class ThroughputMonitor:
             now = time.monotonic()
             # 统计表只是只读计数器，与代理开关、页面是否打开无关，定期自愈
             self._ensure_device_table(now)
+            # DHCP 换 IP 后及时把新地址同步进 TPROXY 集合；表不存在时是空操作
+            self._refresh_proxy_sets(now)
             with self._lock:
                 active = self._keep or (now - self._last_demand <= DEMAND_GRACE)
             if not active:
@@ -182,6 +185,18 @@ class ThroughputMonitor:
         self._device_retry = now + 30.0
         try:
             device_stats.ensure_if_missing(self.config)
+        except Exception:  # noqa: BLE001
+            pass
+
+    def _refresh_proxy_sets(self, now: float) -> None:
+        """每 10 秒把 ARP/租约里的新 IP 同步进 nft 集合（只读，无表时直接返回）。"""
+        from . import proxy
+
+        if now < self._policy_retry:
+            return
+        self._policy_retry = now + 10.0
+        try:
+            proxy.refresh_proxy_set(self.config)
         except Exception:  # noqa: BLE001
             pass
 

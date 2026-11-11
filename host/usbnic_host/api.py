@@ -18,7 +18,8 @@ from .monitor.clash_proxies import (
 )
 from .monitor.collector import Monitor
 from .monitor.hotspot import hotspot_info
-from .monitor.proxy import set_proxy
+from .monitor.proxy import refresh_proxy_set, set_proxy
+from .monitor import device_policy
 from .monitor.throughput import ThroughputMonitor
 from .net.modes import MODES, MODE_PROXY, apply_mode
 from .net.router import invalidate_router_status, probe_5g_ap, router_status
@@ -53,6 +54,15 @@ class ModeRequest(BaseModel):
 
 class KeepRequest(BaseModel):
     enabled: bool = False
+
+
+class DevicePolicyRequest(BaseModel):
+    mac: str
+    policy: str
+
+
+class DefaultPolicyRequest(BaseModel):
+    policy: str
 
 
 def create_app(monitor: Monitor, config: Config) -> FastAPI:
@@ -131,6 +141,23 @@ def create_app(monitor: Monitor, config: Config) -> FastAPI:
     @app.get("/api/events")
     def events(limit: int = Query(default=100, ge=1, le=500)) -> dict:
         return {"items": monitor.events(limit=limit)}
+
+    @app.get("/api/usage")
+    def usage_today() -> dict:
+        """今日前台应用使用时长排行（只读，不含窗口标题）。"""
+        return monitor.usage.snapshot()
+
+    @app.get("/api/usage/trend")
+    def usage_trend(days: int = Query(default=7, ge=2, le=90)) -> dict:
+        return monitor.usage.trend(days)
+
+    @app.get("/api/system/health")
+    def system_health(
+        hours: float = Query(default=6.0, ge=0.5, le=720),
+        points: int = Query(default=240, ge=30, le=600),
+    ) -> dict:
+        """CPU / 内存 / swap / 磁盘 / 温度曲线。"""
+        return monitor.system_health.snapshot(hours, points)
 
     @app.post("/api/speedtest/start")
     def speedtest_start() -> dict:
@@ -233,6 +260,29 @@ def create_app(monitor: Monitor, config: Config) -> FastAPI:
     def devices_traffic() -> dict:
         """按设备的下行/上行实时速率与累计量（只读，来自 nftables 计数器）。"""
         return throughput.device_snapshot()
+
+    @app.get("/api/devices/policies")
+    def devices_policies() -> dict:
+        """设备级策略：谁走代理、谁直连，以及当前是否已生效。"""
+        return device_policy.table(config)
+
+    @app.put("/api/devices/policy")
+    def devices_policy(body: DevicePolicyRequest) -> dict:
+        result = device_policy.set_device(config, body.mac, body.policy)
+        if not result["ok"]:
+            return JSONResponse(status_code=400, content=result)
+        result["refresh"] = refresh_proxy_set(config)
+        result.update(device_policy.table(config))
+        return result
+
+    @app.put("/api/devices/policy/default")
+    def devices_policy_default(body: DefaultPolicyRequest) -> dict:
+        result = device_policy.set_default(config, body.policy)
+        if not result["ok"]:
+            return JSONResponse(status_code=400, content=result)
+        result["refresh"] = refresh_proxy_set(config)
+        result.update(device_policy.table(config))
+        return result
 
     @app.get("/api/router/status")
     def router_info() -> dict:
