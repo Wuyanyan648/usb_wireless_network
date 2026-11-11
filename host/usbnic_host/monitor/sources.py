@@ -3,6 +3,7 @@ from __future__ import annotations
 import glob
 import json
 import re
+import subprocess
 import time
 import urllib.error
 import urllib.request
@@ -370,6 +371,27 @@ def _netbios_name(ip: str, timeout: float) -> str:
         if "<00>" in line and "GROUP" not in line.upper():
             return line.split("<00>", 1)[0].strip()
     return ""
+
+
+def get_local_addresses() -> dict[str, str]:
+    """返回本机全部接口地址 {ip: ifname}，包含 lo / Meta / 隧道口。
+
+    设备表用它与下游设备区分，避免把本机网关地址当成陌生设备。
+    """
+    try:
+        proc = subprocess.run(["ip", "-j", "addr", "show"], capture_output=True,
+                              text=True, timeout=3)
+        links = json.loads(proc.stdout or "[]")
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return {}
+    result = {}
+    for link in links:
+        name = link.get("ifname") or ""
+        for info in link.get("addr_info") or []:
+            local = info.get("local")
+            if local and name:
+                result[local] = name
+    return result
 
 
 def resolve_hostname(ip: str, timeout: float = 0.8) -> tuple[str, str]:

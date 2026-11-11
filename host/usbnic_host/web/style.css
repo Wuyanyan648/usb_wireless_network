@@ -300,9 +300,45 @@ input {
 
 .grid-main {
   display: grid;
-  grid-template-columns: minmax(0, 1.25fr) minmax(0, 0.9fr);
+  grid-template-columns: minmax(0, 0.72fr) minmax(0, 1.28fr);
   gap: 16px;
   margin-bottom: 16px;
+}
+
+/* 设备表固定在第二栏顶部，进页面第一屏即可见 */
+#deviceSection {
+  grid-column: 2;
+  grid-row: 1;
+  align-self: start;
+}
+
+/* 右栏变窄，设备表用紧凑排版保证 8 列不溢出 */
+#deviceSection .data-table {
+  font-size: 12px;
+}
+
+#deviceSection .data-table th,
+#deviceSection .data-table td {
+  padding: 6px 8px;
+}
+
+#deviceSection .type-badge {
+  white-space: nowrap;
+}
+
+#deviceSection .cell-name {
+  display: inline-block;
+  max-width: 210px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
+#ifaceSection {
+  grid-column: 1;
+  grid-row: 2;
+  align-self: start;
 }
 
 .grid-bottom {
@@ -1217,6 +1253,11 @@ button.proxy-node:disabled {
   .grid-main,
   .grid-bottom {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  #deviceSection {
+    grid-column: auto;
+    grid-row: auto;
   }
 }
 

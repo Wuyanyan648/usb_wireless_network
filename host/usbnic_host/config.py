@@ -44,6 +44,8 @@ class Config:
     http_timeout: float = 1.5
     log_level: str = "info"
     device_aliases: dict[str, str] = field(default_factory=dict)
+    # 默认在设备表里保留本机接口地址并标注"本机"；置 true 则从列表过滤掉
+    hide_local_addresses: bool = False
     # 三种网络模式使用的 NetworkManager 连接名与下游网关参数
     uplink_connection: str = "usbnic-uplink"
     gateway_connection: str = "usbnic-gateway"
@@ -159,6 +161,7 @@ class Config:
                 str(key).lower().replace("-", ":"): str(value)
                 for key, value in (raw.get("device_aliases") or {}).items()
             },
+            hide_local_addresses=bool(raw.get("hide_local_addresses", False)),
             uplink_connection=str(raw.get("uplink_connection", "usbnic-uplink")),
             gateway_connection=str(raw.get("gateway_connection", "usbnic-gateway")),
             hotspot_connection=str(raw.get("hotspot_connection", "usbnic-hotspot")),

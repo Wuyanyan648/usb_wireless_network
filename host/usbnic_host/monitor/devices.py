@@ -8,6 +8,7 @@ from typing import Any
 from ..config import Config
 from ..util import ip_sort_key, normalize_mac
 from .sources import (
+    get_local_addresses,
     infer_vendor,
     is_local_mac,
     lookup_vendor,
@@ -248,6 +249,9 @@ def build_devices(
     for iface in interfaces:
         for cidr in list(iface.get("ipv4") or []) + list(iface.get("ipv6") or []):
             local_ifaces[str(cidr).split("/", 1)[0]] = iface
+    # 补齐 lo / Meta 等未出现在监控接口列表里的本机地址
+    for ip, name in get_local_addresses().items():
+        local_ifaces.setdefault(ip, {"name": name, "type": "vpn" if name == "Meta" else ""})
 
     # 5) 名称、厂商、代理链路
     for key, device in devices.items():
@@ -304,6 +308,9 @@ def build_devices(
             device["type"] = "unknown"
         if not device.get("interface"):
             device["interface"] = _iface_for_ip(interfaces, device.get("ip") or "")
+
+    if config.hide_local_addresses:
+        devices = {key: dev for key, dev in devices.items() if not dev.get("is_local")}
 
     return devices
 

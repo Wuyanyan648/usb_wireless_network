@@ -136,6 +136,9 @@ device_aliases:
   # 上行光猫（Sichuan Tianyi Comheart / 天邑 TEWA）
   "cc:a2:60:a2:94:70": "光猫（天邑 TEWA 天翼网关）"
 
+# 设备表里是否隐藏本机接口地址（默认 false：保留并标注"本机"）
+hide_local_addresses: false
+
 # ---------- 使用时长 / 系统健康（并入 usbnicd，不单独起服务） ----------
 # 关闭后不再采集前台窗口，但历史数据仍可查询
 usage_enabled: true

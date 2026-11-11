@@ -246,8 +246,13 @@ class ThroughputMonitor:
         for iface in ifaces:
             for cidr in list(iface.get("ipv4") or []) + list(iface.get("ipv6") or []):
                 local_map[str(cidr).split("/", 1)[0]] = iface
+        from .sources import get_local_addresses
+
+        for ip, name in get_local_addresses().items():
+            local_map.setdefault(ip, {"name": name, "type": "vpn" if name == "Meta" else ""})
         from .devices import _local_label
 
+        kept = []
         for item in items:
             ip = str(item.get("ip") or "")
             iface = local_map.get(ip)
@@ -264,6 +269,9 @@ class ThroughputMonitor:
                     item["name"] = "设备（随机 MAC）"
                     item["mac_random"] = True
                     item["name_note"] = "MAC 未在 IEEE 注册，且没有可用的主机名"
+            if not (self.config.hide_local_addresses and item.get("is_local")):
+                kept.append(item)
+        items = kept
         items.sort(key=lambda item: (item.get("rx_rate", 0) + item.get("tx_rate", 0)), reverse=True)
         for item in items:
             item["rx_rate"] = round(float(item.get("rx_rate") or 0.0), 2)

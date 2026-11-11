@@ -56,6 +56,103 @@
       </article>
     </section>
 
+    <div class="grid-main">
+      <section class="card uplink-card">
+        <div class="card-head">
+          <h2>上行与健康</h2>
+          <span class="hint" id="healthChecked">--</span>
+        </div>
+        <div class="uplink-row">
+          <div class="uplink-main">
+            <div class="kv"><span>接口</span><strong id="uplinkDev">--</strong></div>
+            <div class="kv"><span>地址</span><strong id="uplinkIp">--</strong></div>
+            <div class="kv"><span>网关</span><strong id="uplinkGw">--</strong></div>
+            <div class="kv"><span>链路</span><strong id="uplinkLink">--</strong></div>
+          </div>
+          <div class="health-grid" id="healthGrid">
+            <div class="health-empty">等待探测</div>
+          </div>
+        </div>
+      </section>
+
+      <section class="card chart-card">
+        <div class="card-head">
+          <h2>实时吞吐</h2>
+          <div class="legend">
+            <span class="legend-item"><i class="legend-dot rx"></i>下行</span>
+            <span class="legend-item"><i class="legend-dot tx"></i>上行</span>
+          </div>
+        </div>
+        <div class="chart-wrap"><canvas id="trafficChart"></canvas></div>
+        <div class="chart-foot">
+          <span id="chartIface">--</span>
+          <span id="chartRange">最近 2 分钟</span>
+        </div>
+      </section>
+
+      <section class="card" id="ifaceSection">
+      <div class="card-head">
+        <h2>接口</h2>
+        <span class="hint">速率按 2 秒采样计算</span>
+      </div>
+      <div class="table-wrap">
+        <table class="data-table" id="ifaceTable">
+          <thead>
+            <tr>
+              <th>接口</th>
+              <th>类型</th>
+              <th>状态</th>
+              <th>链路</th>
+              <th>IPv4</th>
+              <th>连接</th>
+              <th class="num">下行</th>
+              <th class="num">上行</th>
+              <th class="num">错误 / 丢包</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+      <section class="card" id="deviceSection">
+        <div class="card-head">
+          <h2>设备</h2>
+          <span class="hint" id="deviceMeta">在线状态、速率、流量与代理策略</span>
+          <div class="table-tools">
+            <div class="segmented policy-default" id="policyDefault" title="没单独设置的设备使用这个默认策略">
+              <button data-policy="direct" type="button">默认直连</button>
+              <button data-policy="proxy" type="button">默认代理</button>
+            </div>
+            <div class="segmented" id="deviceFilter">
+              <button data-filter="all" class="active" type="button">全部</button>
+              <button data-filter="online" type="button">在线</button>
+              <button data-filter="offline" type="button">离线</button>
+              <button data-filter="proxied" type="button">走代理</button>
+            </div>
+            <input id="deviceSearch" class="search" type="search" placeholder="搜索 IP / MAC / 名称" autocomplete="off">
+          </div>
+        </div>
+        <div class="device-table-wrap">
+          <table class="device-table" id="deviceTable">
+            <thead>
+              <tr>
+                <th>状态</th>
+                <th>设备</th>
+                <th class="policy-col">代理</th>
+                <th>IP / MAC</th>
+                <th class="num">速率 ↓ / ↑</th>
+                <th class="num">累计 ↓ / ↑</th>
+              </tr>
+            </thead>
+            <tbody id="deviceRateRows"></tbody>
+          </table>
+        </div>
+        <div class="empty" id="deviceEmpty" hidden>没有匹配的设备</div>
+      </section>
+
+    </div>
+
     <section class="card usage-panel">
       <div class="card-head">
         <div>
@@ -112,41 +209,6 @@
       </div>
     </section>
 
-    <div class="grid-main">
-      <section class="card uplink-card">
-        <div class="card-head">
-          <h2>上行与健康</h2>
-          <span class="hint" id="healthChecked">--</span>
-        </div>
-        <div class="uplink-row">
-          <div class="uplink-main">
-            <div class="kv"><span>接口</span><strong id="uplinkDev">--</strong></div>
-            <div class="kv"><span>地址</span><strong id="uplinkIp">--</strong></div>
-            <div class="kv"><span>网关</span><strong id="uplinkGw">--</strong></div>
-            <div class="kv"><span>链路</span><strong id="uplinkLink">--</strong></div>
-          </div>
-          <div class="health-grid" id="healthGrid">
-            <div class="health-empty">等待探测</div>
-          </div>
-        </div>
-      </section>
-
-      <section class="card chart-card">
-        <div class="card-head">
-          <h2>实时吞吐</h2>
-          <div class="legend">
-            <span class="legend-item"><i class="legend-dot rx"></i>下行</span>
-            <span class="legend-item"><i class="legend-dot tx"></i>上行</span>
-          </div>
-        </div>
-        <div class="chart-wrap"><canvas id="trafficChart"></canvas></div>
-        <div class="chart-foot">
-          <span id="chartIface">--</span>
-          <span id="chartRange">最近 2 分钟</span>
-        </div>
-      </section>
-
-    </div>
 
     <section class="card speedtest-panel">
       <div class="card-head">
@@ -282,68 +344,7 @@
       </div>
     </section>
 
-    <section class="card">
-      <div class="card-head">
-        <h2>接口</h2>
-        <span class="hint">速率按 2 秒采样计算</span>
-      </div>
-      <div class="table-wrap">
-        <table class="data-table" id="ifaceTable">
-          <thead>
-            <tr>
-              <th>接口</th>
-              <th>类型</th>
-              <th>状态</th>
-              <th>链路</th>
-              <th>IPv4</th>
-              <th>连接</th>
-              <th class="num">下行</th>
-              <th class="num">上行</th>
-              <th class="num">错误 / 丢包</th>
-            </tr>
-          </thead>
-          <tbody></tbody>
-        </table>
-      </div>
-    </section>
 
-      <section class="card" id="deviceSection">
-        <div class="card-head">
-          <h2>设备</h2>
-          <span class="hint" id="deviceMeta">在线状态、速率、流量与代理策略</span>
-          <div class="table-tools">
-            <div class="segmented policy-default" id="policyDefault" title="没单独设置的设备使用这个默认策略">
-              <button data-policy="direct" type="button">默认直连</button>
-              <button data-policy="proxy" type="button">默认代理</button>
-            </div>
-            <div class="segmented" id="deviceFilter">
-              <button data-filter="all" class="active" type="button">全部</button>
-              <button data-filter="online" type="button">在线</button>
-              <button data-filter="offline" type="button">离线</button>
-              <button data-filter="proxied" type="button">走代理</button>
-            </div>
-            <input id="deviceSearch" class="search" type="search" placeholder="搜索 IP / MAC / 名称" autocomplete="off">
-          </div>
-        </div>
-        <div class="device-table-wrap">
-          <table class="device-table" id="deviceTable">
-            <thead>
-              <tr>
-                <th>状态</th>
-                <th>设备</th>
-                <th class="policy-col">代理</th>
-                <th>IP / MAC</th>
-                <th>接口</th>
-                <th class="num">下行</th>
-                <th class="num">上行</th>
-                <th class="num">累计 ↓ / ↑</th>
-              </tr>
-            </thead>
-            <tbody id="deviceRateRows"></tbody>
-          </table>
-        </div>
-        <div class="empty" id="deviceEmpty" hidden>没有匹配的设备</div>
-      </section>
 
     <div class="grid-bottom">
       <section class="card">

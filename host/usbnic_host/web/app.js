@@ -887,6 +887,7 @@ function mergedDevices() {
   for (const item of traffic) {
     const info = (item.ip && byIp.get(item.ip)) || (item.mac && byMac.get(item.mac)) || {};
     const row = {
+      ...item,
       ...info,
       ip: item.ip || info.ip,
       mac: item.mac || info.mac,
@@ -989,15 +990,15 @@ function deviceRow(item) {
     const macLine = item.mac + (item.mac_random ? " · 随机 MAC" : "");
     idCell.appendChild(el("div", "cell-sub mono", macLine));
   }
+  if (item.interface) {
+    idCell.appendChild(el("div", "cell-sub", item.interface));
+  }
   row.appendChild(idCell);
 
-  row.appendChild(el("td", "muted", item.interface || "—"));
-  row.appendChild(
-    el("td", "num", item.rx_rate_mbps != null ? `↓ ${fmtMbps(item.rx_rate_mbps)}` : "—")
-  );
-  row.appendChild(
-    el("td", "num", item.tx_rate_mbps != null ? `↑ ${fmtMbps(item.tx_rate_mbps)}` : "—")
-  );
+  const rateCell = el("td", "num");
+  rateCell.appendChild(el("div", "", item.rx_rate_mbps != null ? `↓ ${fmtMbps(item.rx_rate_mbps)}` : "—"));
+  rateCell.appendChild(el("div", "cell-sub", item.tx_rate_mbps != null ? `↑ ${fmtMbps(item.tx_rate_mbps)}` : "—"));
+  row.appendChild(rateCell);
   row.appendChild(
     el(
       "td",
